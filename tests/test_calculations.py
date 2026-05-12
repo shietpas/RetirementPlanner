@@ -145,6 +145,34 @@ class CalculationTests(unittest.TestCase):
         self.assertEqual(follow_on[0].salary_income, 0.0)
         self.assertGreater(follow_on[0].withdrawn_total, 0.0)
 
+    def test_salary_does_not_increase_ending_balance(self):
+        projection = simulate_retirement(
+            accounts=[
+                Account(
+                    owner="Primary",
+                    name="401k",
+                    account_type=AccountType.K401_NON_ROTH,
+                    balance=100000.0,
+                    annual_return_rate=0.10,
+                )
+            ],
+            years=1,
+            annual_withdrawal_value=60000.0,
+            withdrawal_mode="flat",
+            owner_age_by_name={"Primary": 50},
+            owner_retirement_age_by_name={"Primary": 65},
+            owner_salary_by_name={"Primary": 60000.0},
+            owner_ss_by_name={"Primary": (67, 0.0)},
+            income_tax_rate=0.0,
+            capital_gains_tax_rate=0.0,
+        )
+
+        self.assertEqual(len(projection), 1)
+        self.assertEqual(projection[0].withdrawn_total, 0.0)
+        self.assertEqual(projection[0].salary_income, 60000.0)
+        # Ending balance should reflect returns only, not salary contributions.
+        self.assertEqual(projection[0].ending_balance, 110000.0)
+
 
 if __name__ == "__main__":
     unittest.main()

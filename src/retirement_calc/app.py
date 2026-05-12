@@ -188,7 +188,8 @@ class RetirementApp:
         ttk.Entry(frame, textvariable=self.account_cost_basis_var, width=14).grid(row=1, column=6, padx=6, pady=4)
 
         ttk.Button(frame, text="Add Account", command=self.add_account).grid(row=1, column=7, padx=6, pady=4)
-        ttk.Button(frame, text="Remove Selected", command=self.remove_selected_account).grid(row=1, column=8, padx=6, pady=4)
+        ttk.Button(frame, text="Update Selected", command=self.update_selected_account).grid(row=1, column=8, padx=6, pady=4)
+        ttk.Button(frame, text="Remove Selected", command=self.remove_selected_account).grid(row=1, column=9, padx=6, pady=4)
 
         ttk.Checkbutton(
             frame,
@@ -208,7 +209,7 @@ class RetirementApp:
             show="headings",
             height=7,
         )
-        self.accounts_tree.grid(row=3, column=0, columnspan=9, sticky="ew", padx=6, pady=8)
+        self.accounts_tree.grid(row=3, column=0, columnspan=10, sticky="ew", padx=6, pady=8)
 
         for col, text, width in [
             ("owner", "Owner", 90),
@@ -221,6 +222,8 @@ class RetirementApp:
         ]:
             self.accounts_tree.heading(col, text=text)
             self.accounts_tree.column(col, width=width, anchor="w")
+
+        self.accounts_tree.bind("<<TreeviewSelect>>", self.on_account_selected)
 
     def _build_plan_section(self, frame: ttk.LabelFrame) -> None:
         ttk.Radiobutton(frame, text="Flat annual withdrawal", variable=self.withdrawal_mode_var, value="flat").grid(
@@ -459,6 +462,63 @@ class RetirementApp:
         if 0 <= index < len(self.accounts):
             self.accounts.pop(index)
             self._refresh_accounts_tree()
+
+    def on_account_selected(self, _event: tk.Event | None = None) -> None:
+        selected = self.accounts_tree.selection()
+        if not selected:
+            return
+        index = int(selected[0])
+        if not (0 <= index < len(self.accounts)):
+            return
+
+        account = self.accounts[index]
+        self.account_owner_var.set(account.owner)
+        self.account_name_var.set(account.name)
+        self.account_type_var.set(ACCOUNT_TYPE_LABELS[account.account_type])
+        self.account_asset_class_var.set(ASSET_CLASS_LABELS[account.asset_class])
+        self.account_balance_var.set(f"{account.balance:.2f}")
+        self.account_return_var.set(f"{account.annual_return_rate * 100:.2f}")
+        self.account_cost_basis_var.set(f"{account.cost_basis:.2f}")
+
+    def update_selected_account(self) -> None:
+        selected = self.accounts_tree.selection()
+        if not selected:
+            messagebox.showinfo("No selection", "Select an account row to update.")
+            return
+
+        index = int(selected[0])
+        if not (0 <= index < len(self.accounts)):
+            messagebox.showerror("Update failed", "Selected account is out of range.")
+            return
+
+        try:
+            account_label = self.account_type_var.get()
+            account_type = LABEL_TO_ACCOUNT_TYPE[account_label]
+            asset_class = LABEL_TO_ASSET_CLASS[self.account_asset_class_var.get()]
+            balance = float(self.account_balance_var.get())
+            if self.use_default_returns_var.get():
+                annual_return_rate = self._asset_class_default_rate(asset_class)
+            else:
+                annual_return_rate = float(self.account_return_var.get()) / 100.0
+            cost_basis = float(self.account_cost_basis_var.get())
+
+            if account_type != AccountType.TAXABLE_INVESTMENT:
+                cost_basis = 0.0
+
+            self.accounts[index] = Account(
+                owner=self.account_owner_var.get(),
+                name=self.account_name_var.get().strip() or account_label,
+                account_type=account_type,
+                balance=balance,
+                asset_class=asset_class,
+                annual_return_rate=annual_return_rate,
+                cost_basis=cost_basis,
+            )
+            self._refresh_accounts_tree()
+            self.accounts_tree.selection_set(str(index))
+            self.accounts_tree.focus(str(index))
+        except Exception as exc:
+            messagebox.showerror("Invalid account", str(exc))
 
     def _refresh_accounts_tree(self) -> None:
         for item in self.accounts_tree.get_children():
