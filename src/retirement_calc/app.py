@@ -7,7 +7,7 @@ from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .calculations import YearProjection, age_on_date, simulate_retirement
+from .calculations import YearProjection, age_on_date, simulate_retirement_scenarios
 from .capital_gains_tax_tables import (
     FILING_STATUS_MARRIED_JOINT as CG_FILING_STATUS_MARRIED_JOINT,
     FILING_STATUS_SINGLE as CG_FILING_STATUS_SINGLE,
@@ -101,9 +101,13 @@ class RetirementApp:
         self.withdrawal_mode_var = tk.StringVar(value="flat")
         self.withdrawal_value_var = tk.StringVar(value="60000")
         self.projection_years_var = tk.StringVar(value="30")
+        self.return_volatility_var = tk.StringVar(value="12")
+        self.pessimistic_bias_var = tk.StringVar(value="-3")
+        self.likely_bias_var = tk.StringVar(value="0")
+        self.optimistic_bias_var = tk.StringVar(value="3")
         self.tax_table_status_var = tk.StringVar(value="")
         self.cap_gains_table_status_var = tk.StringVar(value="")
-        self.last_projection: list[YearProjection] = []
+        self.last_projection_by_scenario: dict[str, list[YearProjection]] = {}
         self.tax_table_config = load_tax_table_config()
         self.capital_gains_table_config = load_capital_gains_config()
         self.include_spouse_var.trace_add("write", lambda *_: self._update_tax_table_status())
@@ -290,13 +294,25 @@ class RetirementApp:
         ttk.Label(frame, text="Projection Years").grid(row=0, column=2, sticky="w", padx=6, pady=4)
         ttk.Entry(frame, textvariable=self.projection_years_var, width=8).grid(row=1, column=2, padx=6, pady=4)
 
-        ttk.Label(frame, text="Tax Table").grid(row=0, column=3, sticky="w", padx=6, pady=4)
-        ttk.Label(frame, textvariable=self.tax_table_status_var).grid(row=1, column=3, columnspan=2, sticky="w", padx=6, pady=4)
+        ttk.Label(frame, text="Annual Return Volatility %").grid(row=0, column=3, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.return_volatility_var, width=10).grid(row=1, column=3, padx=6, pady=4)
 
-        ttk.Label(frame, text="Capital Gains Table").grid(row=2, column=0, sticky="w", padx=6, pady=4)
-        ttk.Label(frame, textvariable=self.cap_gains_table_status_var).grid(row=2, column=1, columnspan=4, sticky="w", padx=6, pady=4)
+        ttk.Label(frame, text="Pessimistic Bias %").grid(row=0, column=4, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.pessimistic_bias_var, width=10).grid(row=1, column=4, padx=6, pady=4)
 
-        ttk.Button(frame, text="Calculate Plan", command=self.calculate_plan).grid(row=1, column=5, padx=10, pady=4)
+        ttk.Label(frame, text="Likely Bias %").grid(row=0, column=5, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.likely_bias_var, width=10).grid(row=1, column=5, padx=6, pady=4)
+
+        ttk.Label(frame, text="Optimistic Bias %").grid(row=0, column=6, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.optimistic_bias_var, width=10).grid(row=1, column=6, padx=6, pady=4)
+
+        ttk.Label(frame, text="Tax Table").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(frame, textvariable=self.tax_table_status_var).grid(row=2, column=1, columnspan=3, sticky="w", padx=6, pady=4)
+
+        ttk.Label(frame, text="Capital Gains Table").grid(row=2, column=4, sticky="w", padx=6, pady=4)
+        ttk.Label(frame, textvariable=self.cap_gains_table_status_var).grid(row=2, column=5, columnspan=2, sticky="w", padx=6, pady=4)
+
+        ttk.Button(frame, text="Calculate Plan", command=self.calculate_plan).grid(row=1, column=7, padx=10, pady=4)
 
         ttk.Label(frame, text="Settings").grid(row=3, column=0, sticky="w", padx=6, pady=(8, 4))
         ttk.Button(frame, text="Import Settings", command=self.import_settings_json).grid(
@@ -359,6 +375,12 @@ class RetirementApp:
                 "withdrawal_value": self.withdrawal_value_var.get(),
                 "projection_years": self.projection_years_var.get(),
             },
+            "scenario_returns": {
+                "annual_volatility_percent": self.return_volatility_var.get(),
+                "pessimistic_bias_percent": self.pessimistic_bias_var.get(),
+                "likely_bias_percent": self.likely_bias_var.get(),
+                "optimistic_bias_percent": self.optimistic_bias_var.get(),
+            },
             "return_profile": {
                 "use_default_returns": self.use_default_returns_var.get(),
                 "stocks_return_percent": self.default_stock_return_var.get(),
@@ -402,6 +424,7 @@ class RetirementApp:
         primary = people.get("primary", {})
         spouse = people.get("spouse", {})
         plan = payload.get("plan", {})
+        scenario_returns = payload.get("scenario_returns", {})
         return_profile = payload.get("return_profile", {})
         accounts_data = payload.get("accounts", [])
 
@@ -409,6 +432,8 @@ class RetirementApp:
             raise ValueError("Invalid settings: person details are invalid.")
         if not isinstance(plan, dict) or not isinstance(return_profile, dict):
             raise ValueError("Invalid settings: plan or return profile is invalid.")
+        if not isinstance(scenario_returns, dict):
+            raise ValueError("Invalid settings: scenario return settings are invalid.")
         if not isinstance(accounts_data, list):
             raise ValueError("Invalid settings: accounts must be an array.")
 
@@ -430,6 +455,16 @@ class RetirementApp:
         self.withdrawal_mode_var.set(str(plan.get("withdrawal_mode", self.withdrawal_mode_var.get())))
         self.withdrawal_value_var.set(str(plan.get("withdrawal_value", self.withdrawal_value_var.get())))
         self.projection_years_var.set(str(plan.get("projection_years", self.projection_years_var.get())))
+        self.return_volatility_var.set(
+            str(scenario_returns.get("annual_volatility_percent", self.return_volatility_var.get()))
+        )
+        self.pessimistic_bias_var.set(
+            str(scenario_returns.get("pessimistic_bias_percent", self.pessimistic_bias_var.get()))
+        )
+        self.likely_bias_var.set(str(scenario_returns.get("likely_bias_percent", self.likely_bias_var.get())))
+        self.optimistic_bias_var.set(
+            str(scenario_returns.get("optimistic_bias_percent", self.optimistic_bias_var.get()))
+        )
 
         self.use_default_returns_var.set(
             self._to_bool(return_profile.get("use_default_returns", self.use_default_returns_var.get()))
@@ -465,7 +500,7 @@ class RetirementApp:
             )
 
         self.accounts = loaded_accounts
-        self.last_projection = []
+        self.last_projection_by_scenario = {}
         self.results_text.delete("1.0", tk.END)
         self.results_text.insert(tk.END, "Settings imported. Click Calculate Plan to regenerate projection.\n")
         self._refresh_accounts_tree()
@@ -730,6 +765,10 @@ class RetirementApp:
 
             years = int(self.projection_years_var.get())
             withdrawal_value = float(self.withdrawal_value_var.get())
+            annual_return_volatility = float(self.return_volatility_var.get()) / 100.0
+            pessimistic_bias = float(self.pessimistic_bias_var.get()) / 100.0
+            likely_bias = float(self.likely_bias_var.get()) / 100.0
+            optimistic_bias = float(self.optimistic_bias_var.get()) / 100.0
             tax_brackets = tax_brackets_for_status(self.tax_table_config, self._filing_status())
             capital_gains_brackets = capital_gains_brackets_for_status(
                 self.capital_gains_table_config,
@@ -740,19 +779,8 @@ class RetirementApp:
             owner_retirement_age_by_name = self._owner_retirement_age_config()
             owner_salary_by_name = self._owner_salary_config()
             owner_ss_by_name = self._owner_ss_config()
-            projection = simulate_retirement(
-                accounts=[
-                    Account(
-                        owner=acc.owner,
-                        name=acc.name,
-                        account_type=acc.account_type,
-                        balance=acc.balance,
-                        asset_class=acc.asset_class,
-                        annual_return_rate=acc.annual_return_rate,
-                        cost_basis=acc.cost_basis,
-                    )
-                    for acc in self.accounts
-                ],
+            projection_by_scenario = simulate_retirement_scenarios(
+                accounts=self.accounts,
                 years=years,
                 annual_withdrawal_value=withdrawal_value,
                 withdrawal_mode=self.withdrawal_mode_var.get(),
@@ -762,16 +790,50 @@ class RetirementApp:
                 owner_ss_by_name=owner_ss_by_name,
                 tax_brackets=tax_brackets,
                 capital_gains_brackets=capital_gains_brackets,
+                annual_return_volatility=annual_return_volatility,
+                pessimistic_return_bias=pessimistic_bias,
+                likely_return_bias=likely_bias,
+                optimistic_return_bias=optimistic_bias,
             )
-            self.last_projection = projection
-            self._render_projection(projection)
+            self.last_projection_by_scenario = projection_by_scenario
+            self._render_projection_scenarios(projection_by_scenario)
         except Exception as exc:
             messagebox.showerror("Calculation error", str(exc))
 
-    def _render_projection(self, projection: list[YearProjection]) -> None:
+    def _render_projection_scenarios(self, projection_by_scenario: dict[str, list[YearProjection]]) -> None:
         self.results_text.delete("1.0", tk.END)
-        if not projection:
+        if not projection_by_scenario:
             self.results_text.insert(tk.END, "No projection results generated.\n")
+            return
+
+        self.results_text.insert(
+            tk.END,
+            "Scenario Summary | Final Balance | Total Taxes | First Year Shortfall\n",
+        )
+        self.results_text.insert(tk.END, "-" * 90 + "\n")
+
+        for scenario_name, projection in projection_by_scenario.items():
+            if not projection:
+                self.results_text.insert(tk.END, f"{scenario_name:<16} | {'N/A':>13} | {'N/A':>11} | {'N/A':>20}\n")
+                continue
+            total_taxes = sum(item.taxes for item in projection)
+            shortfall_year = next((item.calendar_year for item in projection if item.shortfall > 0), None)
+            shortfall_label = "None" if shortfall_year is None else str(shortfall_year)
+            self.results_text.insert(
+                tk.END,
+                f"{scenario_name:<16} | {projection[-1].ending_balance:>13,.2f} | {total_taxes:>11,.2f} | {shortfall_label:>20}\n",
+            )
+
+        self.results_text.insert(tk.END, "\n")
+
+        for scenario_name, projection in projection_by_scenario.items():
+            self._render_projection(scenario_name, projection)
+            self.results_text.insert(tk.END, "\n")
+
+    def _render_projection(self, scenario_name: str, projection: list[YearProjection]) -> None:
+        self.results_text.insert(tk.END, f"=== {scenario_name} Scenario ===\n")
+        if not projection:
+            self.results_text.insert(tk.END, "No projection results generated for this scenario.\n")
             return
 
         account_type_headers = " | ".join(
@@ -780,10 +842,10 @@ class RetirementApp:
         self.results_text.insert(
             tk.END,
             "Year | Calendar Year | User Age | Spouse Age | Withdrawn | Salary | SS Income | Ordinary | "
-            "Taxable SS | Cap Gains | Taxes | Net Income | End Balance | Shortfall | "
+            "Taxable SS | Cap Gains | Taxes | Net Income | End Balance | Shortfall | Return % | Gain/Loss | Market Adj % | "
             f"{account_type_headers}\n",
         )
-        self.results_text.insert(tk.END, "-" * 260 + "\n")
+        self.results_text.insert(tk.END, "-" * 308 + "\n")
 
         total_taxes = 0.0
         for item in projection:
@@ -810,6 +872,9 @@ class RetirementApp:
                 f"{item.net_income:>10,.2f} | "
                 f"{item.ending_balance:>11,.2f} | "
                 f"{item.shortfall:>8,.2f} | "
+                f"{item.annual_return_rate * 100:>8,.2f} | "
+                f"{item.annual_gain_loss:>9,.2f} | "
+                f"{item.market_return_adjustment * 100:>11,.2f} | "
                 f"{account_type_values}\n"
             )
             if item.withdrawal_sources:
@@ -826,7 +891,7 @@ class RetirementApp:
         self.results_text.insert(tk.END, f"Final Balance: {projection[-1].ending_balance:,.2f}\n")
 
     def export_projection_csv(self) -> None:
-        if not self.last_projection:
+        if not self.last_projection_by_scenario:
             messagebox.showinfo("No results", "Run Calculate Plan before exporting CSV.")
             return
 
@@ -843,6 +908,7 @@ class RetirementApp:
                 writer = csv.writer(csv_file)
                 writer.writerow(
                     [
+                        "scenario",
                         "year",
                         "calendar_year",
                         "user_age",
@@ -857,43 +923,51 @@ class RetirementApp:
                         "net_income",
                         "ending_balance",
                         "shortfall",
+                        "annual_return_rate",
+                        "annual_gain_loss",
+                        "market_return_adjustment",
                         *[account_type.value for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS],
                         "withdrawal_sources",
                     ]
                 )
-                for year in self.last_projection:
-                    sources = "; ".join(
-                        [
-                            (
-                                f"{source.owner}/{source.account_name}/"
-                                f"{source.account_type}/{source.tax_treatment}/{source.amount:.2f}"
-                            )
-                            for source in year.withdrawal_sources
-                        ]
-                    )
-                    writer.writerow(
-                        [
-                            year.year_index,
-                            year.calendar_year,
-                            year.user_age,
-                            "" if year.spouse_age is None else year.spouse_age,
-                            f"{year.withdrawn_total:.2f}",
-                            f"{year.salary_income:.2f}",
-                            f"{year.social_security_income:.2f}",
-                            f"{year.ordinary_income:.2f}",
-                            f"{year.taxable_social_security:.2f}",
-                            f"{year.capital_gains:.2f}",
-                            f"{year.taxes:.2f}",
-                            f"{year.net_income:.2f}",
-                            f"{year.ending_balance:.2f}",
-                            f"{year.shortfall:.2f}",
-                            *[
-                                f"{year.withdrawal_by_account_type.get(account_type.value, 0.0):.2f}"
-                                for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS
-                            ],
-                            sources,
-                        ]
-                    )
+                for scenario_name, projection in self.last_projection_by_scenario.items():
+                    for year in projection:
+                        sources = "; ".join(
+                            [
+                                (
+                                    f"{source.owner}/{source.account_name}/"
+                                    f"{source.account_type}/{source.tax_treatment}/{source.amount:.2f}"
+                                )
+                                for source in year.withdrawal_sources
+                            ]
+                        )
+                        writer.writerow(
+                            [
+                                scenario_name,
+                                year.year_index,
+                                year.calendar_year,
+                                year.user_age,
+                                "" if year.spouse_age is None else year.spouse_age,
+                                f"{year.withdrawn_total:.2f}",
+                                f"{year.salary_income:.2f}",
+                                f"{year.social_security_income:.2f}",
+                                f"{year.ordinary_income:.2f}",
+                                f"{year.taxable_social_security:.2f}",
+                                f"{year.capital_gains:.2f}",
+                                f"{year.taxes:.2f}",
+                                f"{year.net_income:.2f}",
+                                f"{year.ending_balance:.2f}",
+                                f"{year.shortfall:.2f}",
+                                f"{year.annual_return_rate:.6f}",
+                                f"{year.annual_gain_loss:.2f}",
+                                f"{year.market_return_adjustment:.6f}",
+                                *[
+                                    f"{year.withdrawal_by_account_type.get(account_type.value, 0.0):.2f}"
+                                    for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS
+                                ],
+                                sources,
+                            ]
+                        )
             messagebox.showinfo("Export complete", f"CSV exported to:\n{path}")
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc))

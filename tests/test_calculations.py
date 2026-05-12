@@ -5,6 +5,7 @@ from src.retirement_calc.calculations import (
     calculate_rmd,
     classify_withdrawals,
     simulate_retirement,
+    simulate_retirement_scenarios,
 )
 from src.retirement_calc.models import Account, AccountType
 from src.retirement_calc.tax_tables import (
@@ -216,6 +217,82 @@ class CalculationTests(unittest.TestCase):
         self.assertEqual(projection[0].salary_income, 60000.0)
         # Ending balance should reflect returns only, not salary contributions.
         self.assertEqual(projection[0].ending_balance, 110000.0)
+
+    def test_scenarios_order_final_balances(self):
+        projections = simulate_retirement_scenarios(
+            accounts=[
+                Account(
+                    owner="Primary",
+                    name="Brokerage",
+                    account_type=AccountType.TAXABLE_INVESTMENT,
+                    balance=100000.0,
+                    annual_return_rate=0.05,
+                    cost_basis=80000.0,
+                )
+            ],
+            years=5,
+            annual_withdrawal_value=0.0,
+            withdrawal_mode="flat",
+            owner_age_by_name={"Primary": 40},
+            owner_retirement_age_by_name={"Primary": 30},
+            owner_salary_by_name={"Primary": 0.0},
+            owner_ss_by_name={"Primary": (67, 0.0)},
+            tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
+            capital_gains_brackets=capital_gains_brackets_for_status(
+                default_capital_gains_config(),
+                FILING_STATUS_SINGLE,
+            ),
+            annual_return_volatility=0.0,
+            pessimistic_return_bias=-0.03,
+            likely_return_bias=0.0,
+            optimistic_return_bias=0.03,
+            random_seed=42,
+        )
+
+        pess_end = projections["Pessimistic"][-1].ending_balance
+        likely_end = projections["Likely"][-1].ending_balance
+        opt_end = projections["Optimistic"][-1].ending_balance
+
+        self.assertLess(pess_end, likely_end)
+        self.assertLess(likely_end, opt_end)
+
+    def test_variable_returns_are_reproducible_with_seed(self):
+        def run_once() -> list:
+            return simulate_retirement(
+                accounts=[
+                    Account(
+                        owner="Primary",
+                        name="401k",
+                        account_type=AccountType.K401_NON_ROTH,
+                        balance=100000.0,
+                        annual_return_rate=0.05,
+                    )
+                ],
+                years=3,
+                annual_withdrawal_value=0.0,
+                withdrawal_mode="flat",
+                owner_age_by_name={"Primary": 50},
+                owner_retirement_age_by_name={"Primary": 40},
+                owner_salary_by_name={"Primary": 0.0},
+                owner_ss_by_name={"Primary": (67, 0.0)},
+                tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
+                capital_gains_brackets=capital_gains_brackets_for_status(
+                    default_capital_gains_config(),
+                    FILING_STATUS_SINGLE,
+                ),
+                annual_return_volatility=0.10,
+                scenario_return_bias=0.0,
+                random_seed=12345,
+            )
+
+        projection_a = run_once()
+        projection_b = run_once()
+
+        self.assertEqual(
+            [year.ending_balance for year in projection_a],
+            [year.ending_balance for year in projection_b],
+        )
+        self.assertTrue(any(abs(year.market_return_adjustment) > 0 for year in projection_a))
 
 
 if __name__ == "__main__":

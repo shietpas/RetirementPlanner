@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
+import random
 
 from .models import (
     ACCOUNT_TAX_TREATMENT,
@@ -47,6 +48,9 @@ class YearProjection:
     net_income: float
     ending_balance: float
     shortfall: float
+    annual_return_rate: float = 0.0
+    annual_gain_loss: float = 0.0
+    market_return_adjustment: float = 0.0
     withdrawal_by_account_type: dict[str, float] = field(default_factory=dict)
     withdrawal_sources: list[WithdrawalSource] = field(default_factory=list)
 
@@ -108,6 +112,10 @@ def apply_annual_return(balance: float, annual_return_rate: float) -> float:
     if balance < 0:
         raise ValueError("balance must be >= 0")
     return round(balance * (1.0 + annual_return_rate), 2)
+
+
+def clamp_annual_return_rate(value: float) -> float:
+    return max(-1.0, min(2.0, value))
 
 
 def account_tax_treatment(account_type: AccountType) -> TaxTreatment:
@@ -226,15 +234,21 @@ def simulate_retirement(
     owner_ss_by_name: dict[str, tuple[int | None, float]],
     tax_brackets: list[dict[str, float | None]],
     capital_gains_brackets: list[dict[str, float | None]],
+    annual_return_volatility: float = 0.0,
+    scenario_return_bias: float = 0.0,
+    random_seed: int | None = None,
 ) -> list[YearProjection]:
     projections: list[YearProjection] = []
     base_year = date.today().year
     account_type_keys = [account_type.value for account_type in AccountType]
+    rng = random.Random(random_seed)
 
     for year_index in range(1, years + 1):
         total_remaining_before = sum(account.balance for account in accounts)
         if total_remaining_before <= 0:
             break
+
+        market_return_adjustment = rng.gauss(0.0, annual_return_volatility) if annual_return_volatility > 0 else 0.0
 
         if withdrawal_mode == "distribute_years":
             years_left = years - year_index + 1
@@ -290,10 +304,22 @@ def simulate_retirement(
         withdrawn_total = round(sum(amount for _, amount in withdrawals), 2)
         net_income = round(withdrawn_total + salary_income + social_security_income - taxes, 2)
 
+        pre_growth_balance_total = sum(account.balance for account in accounts)
+        weighted_rate_numerator = 0.0
         for account in accounts:
-            account.balance = apply_annual_return(account.balance, account.annual_return_rate)
+            effective_rate = clamp_annual_return_rate(
+                account.annual_return_rate + scenario_return_bias + market_return_adjustment
+            )
+            weighted_rate_numerator += account.balance * effective_rate
+            account.balance = apply_annual_return(account.balance, effective_rate)
 
         ending_balance = round(sum(account.balance for account in accounts), 2)
+        annual_return_rate = (
+            round(weighted_rate_numerator / pre_growth_balance_total, 6)
+            if pre_growth_balance_total > 0
+            else 0.0
+        )
+        annual_gain_loss = round(ending_balance - pre_growth_balance_total, 2)
         projections.append(
             YearProjection(
                 year_index=year_index,
@@ -310,9 +336,69 @@ def simulate_retirement(
                 net_income=net_income,
                 ending_balance=ending_balance,
                 shortfall=shortfall,
+                annual_return_rate=annual_return_rate,
+                annual_gain_loss=annual_gain_loss,
+                market_return_adjustment=round(market_return_adjustment, 6),
                 withdrawal_by_account_type=withdrawal_by_account_type,
                 withdrawal_sources=sources,
             )
         )
 
     return projections
+
+
+def simulate_retirement_scenarios(
+    accounts: list[Account],
+    years: int,
+    annual_withdrawal_value: float,
+    withdrawal_mode: str,
+    owner_age_by_name: dict[str, int],
+    owner_retirement_age_by_name: dict[str, int],
+    owner_salary_by_name: dict[str, float],
+    owner_ss_by_name: dict[str, tuple[int | None, float]],
+    tax_brackets: list[dict[str, float | None]],
+    capital_gains_brackets: list[dict[str, float | None]],
+    annual_return_volatility: float,
+    pessimistic_return_bias: float,
+    likely_return_bias: float,
+    optimistic_return_bias: float,
+    random_seed: int | None = None,
+) -> dict[str, list[YearProjection]]:
+    scenario_biases = {
+        "Pessimistic": pessimistic_return_bias,
+        "Likely": likely_return_bias,
+        "Optimistic": optimistic_return_bias,
+    }
+    projections_by_scenario: dict[str, list[YearProjection]] = {}
+    seed_base = random_seed if random_seed is not None else random.randint(1, 1_000_000_000)
+
+    for idx, (scenario_name, bias) in enumerate(scenario_biases.items()):
+        scenario_accounts = [
+            Account(
+                owner=account.owner,
+                name=account.name,
+                account_type=account.account_type,
+                balance=account.balance,
+                asset_class=account.asset_class,
+                annual_return_rate=account.annual_return_rate,
+                cost_basis=account.cost_basis,
+            )
+            for account in accounts
+        ]
+        projections_by_scenario[scenario_name] = simulate_retirement(
+            accounts=scenario_accounts,
+            years=years,
+            annual_withdrawal_value=annual_withdrawal_value,
+            withdrawal_mode=withdrawal_mode,
+            owner_age_by_name=owner_age_by_name,
+            owner_retirement_age_by_name=owner_retirement_age_by_name,
+            owner_salary_by_name=owner_salary_by_name,
+            owner_ss_by_name=owner_ss_by_name,
+            tax_brackets=tax_brackets,
+            capital_gains_brackets=capital_gains_brackets,
+            annual_return_volatility=annual_return_volatility,
+            scenario_return_bias=bias,
+            random_seed=seed_base + idx,
+        )
+
+    return projections_by_scenario
