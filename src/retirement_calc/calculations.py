@@ -36,6 +36,7 @@ class YearProjection:
     user_age: int
     spouse_age: int | None
     withdrawn_total: float
+    salary_income: float
     social_security_income: float
     ordinary_income: float
     taxable_social_security: float
@@ -176,12 +177,15 @@ def _withdraw_from_account(account: Account, amount: float) -> float:
 def optimize_withdrawals(
     accounts: list[Account],
     owner_ages: dict[str, int],
+    retired_owners: set[str],
     needed_withdrawal: float,
 ) -> tuple[list[tuple[Account, float]], float]:
     withdrawals: list[tuple[Account, float]] = []
     remaining_needed = max(0.0, needed_withdrawal)
 
     for account in accounts:
+        if account.owner not in retired_owners:
+            continue
         age = owner_ages.get(account.owner, 0)
         rmd_amount = calculate_rmd(account.balance, age, account.account_type)
         taken = _withdraw_from_account(account, rmd_amount)
@@ -197,6 +201,8 @@ def optimize_withdrawals(
         return 2
 
     for account in sorted(accounts, key=priority_key):
+        if account.owner not in retired_owners:
+            continue
         if remaining_needed <= 0:
             break
         taken = _withdraw_from_account(account, remaining_needed)
@@ -213,6 +219,8 @@ def simulate_retirement(
     annual_withdrawal_value: float,
     withdrawal_mode: str,
     owner_age_by_name: dict[str, int],
+    owner_retirement_age_by_name: dict[str, int],
+    owner_salary_by_name: dict[str, float],
     owner_ss_by_name: dict[str, tuple[int | None, float]],
     income_tax_rate: float,
     capital_gains_tax_rate: float,
@@ -228,18 +236,29 @@ def simulate_retirement(
 
         if withdrawal_mode == "distribute_years":
             years_left = years - year_index + 1
-            needed_withdrawal = round(total_remaining_before / years_left, 2)
+            target_withdrawal = round(total_remaining_before / years_left, 2)
         else:
-            needed_withdrawal = annual_withdrawal_value
+            target_withdrawal = annual_withdrawal_value
 
         owner_ages = {owner: age + (year_index - 1) for owner, age in owner_age_by_name.items()}
+        retired_owners: set[str] = set()
+        salary_income = 0.0
+        for owner, owner_age in owner_ages.items():
+            retirement_age = owner_retirement_age_by_name.get(owner, 65)
+            if owner_age > retirement_age:
+                retired_owners.add(owner)
+            else:
+                salary_income += owner_salary_by_name.get(owner, 0.0)
+
+        needed_withdrawal = max(0.0, round(target_withdrawal - salary_income, 2))
+
         social_security_income = 0.0
         for owner, (start_age, monthly_amount) in owner_ss_by_name.items():
             owner_age = owner_ages.get(owner, 0)
             if start_age is not None and owner_age >= start_age:
                 social_security_income += monthly_amount * 12.0
 
-        withdrawals, shortfall = optimize_withdrawals(accounts, owner_ages, needed_withdrawal)
+        withdrawals, shortfall = optimize_withdrawals(accounts, owner_ages, retired_owners, needed_withdrawal)
         breakdown = classify_withdrawals(withdrawals)
         sources: list[WithdrawalSource] = []
         withdrawal_by_account_type = {key: 0.0 for key in account_type_keys}
@@ -259,12 +278,12 @@ def simulate_retirement(
             )
         taxable_social_security = round(social_security_income * 0.85, 2)
         taxes = round(
-            (breakdown.ordinary_income + taxable_social_security) * income_tax_rate
+            (salary_income + breakdown.ordinary_income + taxable_social_security) * income_tax_rate
             + breakdown.capital_gains * capital_gains_tax_rate,
             2,
         )
         withdrawn_total = round(sum(amount for _, amount in withdrawals), 2)
-        net_income = round(withdrawn_total + social_security_income - taxes, 2)
+        net_income = round(withdrawn_total + salary_income + social_security_income - taxes, 2)
 
         for account in accounts:
             account.balance = apply_annual_return(account.balance, account.annual_return_rate)
@@ -277,6 +296,7 @@ def simulate_retirement(
                 user_age=owner_ages.get("Primary", 0),
                 spouse_age=owner_ages.get("Spouse"),
                 withdrawn_total=withdrawn_total,
+                salary_income=round(salary_income, 2),
                 social_security_income=round(social_security_income, 2),
                 ordinary_income=round(breakdown.ordinary_income, 2),
                 taxable_social_security=taxable_social_security,
