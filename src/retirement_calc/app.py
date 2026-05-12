@@ -7,7 +7,23 @@ from datetime import date
 from tkinter import filedialog, messagebox, ttk
 
 from .calculations import YearProjection, age_on_date, simulate_retirement
+from .capital_gains_tax_tables import (
+    FILING_STATUS_MARRIED_JOINT as CG_FILING_STATUS_MARRIED_JOINT,
+    FILING_STATUS_SINGLE as CG_FILING_STATUS_SINGLE,
+    CONFIG_PATH as CG_CONFIG_PATH,
+    capital_gains_brackets_for_status,
+    load_capital_gains_config,
+    refresh_capital_gains_config,
+)
 from .models import ASSET_CLASS_DEFAULT_RETURNS, Account, AccountType, AssetClass
+from .tax_tables import (
+    FILING_STATUS_MARRIED_JOINT,
+    FILING_STATUS_SINGLE,
+    CONFIG_PATH,
+    load_tax_table_config,
+    refresh_tax_table_config,
+    tax_brackets_for_status,
+)
 
 
 ACCOUNT_TYPE_LABELS = {
@@ -82,11 +98,17 @@ class RetirementApp:
         self.withdrawal_mode_var = tk.StringVar(value="flat")
         self.withdrawal_value_var = tk.StringVar(value="60000")
         self.projection_years_var = tk.StringVar(value="30")
-        self.income_tax_rate_var = tk.StringVar(value="22")
-        self.cap_gains_tax_rate_var = tk.StringVar(value="15")
+        self.tax_table_status_var = tk.StringVar(value="")
+        self.cap_gains_table_status_var = tk.StringVar(value="")
         self.last_projection: list[YearProjection] = []
+        self.tax_table_config = load_tax_table_config()
+        self.capital_gains_table_config = load_capital_gains_config()
+        self.include_spouse_var.trace_add("write", lambda *_: self._update_tax_table_status())
+        self.include_spouse_var.trace_add("write", lambda *_: self._update_capital_gains_table_status())
 
         self._build_ui()
+        self._update_tax_table_status()
+        self._update_capital_gains_table_status()
 
     def _build_ui(self) -> None:
         self.root.title("RetirementCalc")
@@ -239,16 +261,17 @@ class RetirementApp:
         ttk.Label(frame, text="Projection Years").grid(row=0, column=2, sticky="w", padx=6, pady=4)
         ttk.Entry(frame, textvariable=self.projection_years_var, width=8).grid(row=1, column=2, padx=6, pady=4)
 
-        ttk.Label(frame, text="Income Tax %").grid(row=0, column=3, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.income_tax_rate_var, width=8).grid(row=1, column=3, padx=6, pady=4)
+        ttk.Label(frame, text="Tax Table").grid(row=0, column=3, sticky="w", padx=6, pady=4)
+        ttk.Label(frame, textvariable=self.tax_table_status_var).grid(row=1, column=3, columnspan=2, sticky="w", padx=6, pady=4)
 
-        ttk.Label(frame, text="Capital Gains Tax %").grid(row=0, column=4, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.cap_gains_tax_rate_var, width=8).grid(row=1, column=4, padx=6, pady=4)
+        ttk.Label(frame, text="Capital Gains Table").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(frame, textvariable=self.cap_gains_table_status_var).grid(row=2, column=1, columnspan=4, sticky="w", padx=6, pady=4)
 
         ttk.Button(frame, text="Calculate Plan", command=self.calculate_plan).grid(row=1, column=5, padx=10, pady=4)
         ttk.Button(frame, text="Export CSV", command=self.export_projection_csv).grid(row=1, column=6, padx=10, pady=4)
         ttk.Button(frame, text="Export Settings", command=self.export_settings_json).grid(row=1, column=7, padx=10, pady=4)
         ttk.Button(frame, text="Import Settings", command=self.import_settings_json).grid(row=1, column=8, padx=10, pady=4)
+        ttk.Button(frame, text="Refresh IRS Tax Tables", command=self.refresh_tax_tables).grid(row=1, column=9, padx=10, pady=4)
 
     @staticmethod
     def _to_bool(value: object) -> bool:
@@ -286,8 +309,6 @@ class RetirementApp:
                 "withdrawal_mode": self.withdrawal_mode_var.get(),
                 "withdrawal_value": self.withdrawal_value_var.get(),
                 "projection_years": self.projection_years_var.get(),
-                "income_tax_rate": self.income_tax_rate_var.get(),
-                "capital_gains_tax_rate": self.cap_gains_tax_rate_var.get(),
             },
             "return_profile": {
                 "use_default_returns": self.use_default_returns_var.get(),
@@ -344,8 +365,6 @@ class RetirementApp:
         self.withdrawal_mode_var.set(str(plan.get("withdrawal_mode", self.withdrawal_mode_var.get())))
         self.withdrawal_value_var.set(str(plan.get("withdrawal_value", self.withdrawal_value_var.get())))
         self.projection_years_var.set(str(plan.get("projection_years", self.projection_years_var.get())))
-        self.income_tax_rate_var.set(str(plan.get("income_tax_rate", self.income_tax_rate_var.get())))
-        self.cap_gains_tax_rate_var.set(str(plan.get("capital_gains_tax_rate", self.cap_gains_tax_rate_var.get())))
 
         self.use_default_returns_var.set(
             self._to_bool(return_profile.get("use_default_returns", self.use_default_returns_var.get()))
@@ -424,6 +443,36 @@ class RetirementApp:
         if asset_class == AssetClass.BONDS:
             return float(self.default_bond_return_var.get()) / 100.0
         return float(self.default_cash_return_var.get()) / 100.0
+
+    def _filing_status(self) -> str:
+        return FILING_STATUS_MARRIED_JOINT if self.include_spouse_var.get() else FILING_STATUS_SINGLE
+
+    def _update_tax_table_status(self) -> None:
+        tax_year = self.tax_table_config.get("tax_year", "unknown")
+        source_url = self.tax_table_config.get("source_url", "IRS")
+        filing_status = self._filing_status()
+        status_label = "Married Filing Jointly" if filing_status == FILING_STATUS_MARRIED_JOINT else "Single"
+        self.tax_table_status_var.set(f"{status_label} | IRS {tax_year} | {source_url}")
+
+    def _capital_gains_status_filing(self) -> str:
+        return CG_FILING_STATUS_MARRIED_JOINT if self.include_spouse_var.get() else CG_FILING_STATUS_SINGLE
+
+    def _update_capital_gains_table_status(self) -> None:
+        tax_year = self.capital_gains_table_config.get("tax_year", "unknown")
+        source_url = self.capital_gains_table_config.get("source_url", "IRS")
+        filing_status = self._capital_gains_status_filing()
+        status_label = "Married Filing Jointly" if filing_status == CG_FILING_STATUS_MARRIED_JOINT else "Single"
+        self.cap_gains_table_status_var.set(f"{status_label} | IRS {tax_year} | {source_url}")
+
+    def refresh_tax_tables(self) -> None:
+        try:
+            self.tax_table_config = refresh_tax_table_config(CONFIG_PATH)
+            self.capital_gains_table_config = refresh_capital_gains_config(CG_CONFIG_PATH)
+            self._update_tax_table_status()
+            self._update_capital_gains_table_status()
+            messagebox.showinfo("Tax tables refreshed", "IRS tax brackets were refreshed from the source sites.")
+        except Exception as exc:
+            messagebox.showerror("Tax table refresh failed", str(exc))
 
     def add_account(self) -> None:
         try:
@@ -578,8 +627,11 @@ class RetirementApp:
 
             years = int(self.projection_years_var.get())
             withdrawal_value = float(self.withdrawal_value_var.get())
-            income_tax_rate = float(self.income_tax_rate_var.get()) / 100.0
-            cap_gains_tax_rate = float(self.cap_gains_tax_rate_var.get()) / 100.0
+            tax_brackets = tax_brackets_for_status(self.tax_table_config, self._filing_status())
+            capital_gains_brackets = capital_gains_brackets_for_status(
+                self.capital_gains_table_config,
+                self._capital_gains_status_filing(),
+            )
 
             owner_age_by_name = self._owner_age_by_name()
             owner_retirement_age_by_name = self._owner_retirement_age_config()
@@ -605,8 +657,8 @@ class RetirementApp:
                 owner_retirement_age_by_name=owner_retirement_age_by_name,
                 owner_salary_by_name=owner_salary_by_name,
                 owner_ss_by_name=owner_ss_by_name,
-                income_tax_rate=income_tax_rate,
-                capital_gains_tax_rate=cap_gains_tax_rate,
+                tax_brackets=tax_brackets,
+                capital_gains_brackets=capital_gains_brackets,
             )
             self.last_projection = projection
             self._render_projection(projection)

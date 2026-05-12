@@ -11,6 +11,8 @@ from .models import (
     AccountType,
     TaxTreatment,
 )
+from .tax_tables import calculate_progressive_tax
+from .capital_gains_tax_tables import calculate_capital_gains_tax
 
 
 @dataclass
@@ -222,8 +224,8 @@ def simulate_retirement(
     owner_retirement_age_by_name: dict[str, int],
     owner_salary_by_name: dict[str, float],
     owner_ss_by_name: dict[str, tuple[int | None, float]],
-    income_tax_rate: float,
-    capital_gains_tax_rate: float,
+    tax_brackets: list[dict[str, float | None]],
+    capital_gains_brackets: list[dict[str, float | None]],
 ) -> list[YearProjection]:
     projections: list[YearProjection] = []
     base_year = date.today().year
@@ -277,11 +279,14 @@ def simulate_retirement(
                 )
             )
         taxable_social_security = round(social_security_income * 0.85, 2)
-        taxes = round(
-            (salary_income + breakdown.ordinary_income + taxable_social_security) * income_tax_rate
-            + breakdown.capital_gains * capital_gains_tax_rate,
-            2,
+        ordinary_taxable_income = round(salary_income + breakdown.ordinary_income + taxable_social_security, 2)
+        ordinary_income_tax = calculate_progressive_tax(ordinary_taxable_income, tax_brackets)
+        capital_gains_tax = calculate_capital_gains_tax(
+            ordinary_taxable_income,
+            breakdown.capital_gains,
+            capital_gains_brackets,
         )
+        taxes = round(ordinary_income_tax + capital_gains_tax, 2)
         withdrawn_total = round(sum(amount for _, amount in withdrawals), 2)
         net_income = round(withdrawn_total + salary_income + social_security_income - taxes, 2)
 

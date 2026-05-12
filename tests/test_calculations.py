@@ -7,6 +7,17 @@ from src.retirement_calc.calculations import (
     simulate_retirement,
 )
 from src.retirement_calc.models import Account, AccountType
+from src.retirement_calc.tax_tables import (
+    FILING_STATUS_SINGLE,
+    calculate_progressive_tax,
+    default_tax_table_config,
+    tax_brackets_for_status,
+)
+from src.retirement_calc.capital_gains_tax_tables import (
+    capital_gains_brackets_for_status,
+    calculate_capital_gains_tax,
+    default_capital_gains_config,
+)
 
 
 class CalculationTests(unittest.TestCase):
@@ -54,6 +65,27 @@ class CalculationTests(unittest.TestCase):
         self.assertGreater(calculate_rmd(100000.0, 72, AccountType.K401_NON_ROTH), 0.0)
         self.assertEqual(calculate_rmd(100000.0, 72, AccountType.K401_ROTH), 0.0)
 
+    def test_calculate_progressive_tax_uses_brackets(self):
+        brackets = [
+            {"lower_bound": 0.0, "upper_bound": 10_000.0, "rate": 0.1},
+            {"lower_bound": 10_000.0, "upper_bound": 20_000.0, "rate": 0.2},
+            {"lower_bound": 20_000.0, "upper_bound": None, "rate": 0.3},
+        ]
+
+        self.assertEqual(calculate_progressive_tax(25_000.0, brackets), 4_500.0)
+
+    def test_default_tax_config_includes_single_brackets(self):
+        brackets = tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE)
+        self.assertEqual(brackets[0]["upper_bound"], 12_400.0)
+
+    def test_capital_gains_config_includes_single_brackets(self):
+        brackets = capital_gains_brackets_for_status(default_capital_gains_config(), FILING_STATUS_SINGLE)
+        self.assertEqual(brackets[0]["upper_bound"], 48_350.0)
+
+    def test_capital_gains_tax_uses_brackets(self):
+        brackets = capital_gains_brackets_for_status(default_capital_gains_config(), FILING_STATUS_SINGLE)
+        self.assertEqual(calculate_capital_gains_tax(40_000.0, 20_000.0, brackets), 1747.5)
+
     def test_simulate_retirement_withdrawals_respect_tax_identity(self):
         accounts = [
             Account(
@@ -80,14 +112,17 @@ class CalculationTests(unittest.TestCase):
             owner_retirement_age_by_name={"Primary": 64},
             owner_salary_by_name={"Primary": 0.0},
             owner_ss_by_name={"Primary": (67, 0.0)},
-            income_tax_rate=0.22,
-            capital_gains_tax_rate=0.15,
+            tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
+            capital_gains_brackets=capital_gains_brackets_for_status(
+                default_capital_gains_config(),
+                FILING_STATUS_SINGLE,
+            ),
         )
 
         self.assertEqual(len(projection), 1)
         self.assertEqual(projection[0].ordinary_income, 5000.0)
         self.assertEqual(projection[0].withdrawn_total, 10000.0)
-        self.assertEqual(projection[0].taxes, 1100.0)
+        self.assertEqual(projection[0].taxes, 500.0)
         self.assertGreaterEqual(len(projection[0].withdrawal_sources), 1)
         self.assertEqual(projection[0].withdrawal_sources[0].owner, "Primary")
 
@@ -110,8 +145,11 @@ class CalculationTests(unittest.TestCase):
             owner_retirement_age_by_name={"Primary": 55},
             owner_salary_by_name={"Primary": 60000.0},
             owner_ss_by_name={"Primary": (67, 0.0)},
-            income_tax_rate=0.22,
-            capital_gains_tax_rate=0.15,
+            tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
+            capital_gains_brackets=capital_gains_brackets_for_status(
+                default_capital_gains_config(),
+                FILING_STATUS_SINGLE,
+            ),
         )
 
         self.assertEqual(len(projection), 2)
@@ -139,8 +177,11 @@ class CalculationTests(unittest.TestCase):
             owner_retirement_age_by_name={"Primary": 55},
             owner_salary_by_name={"Primary": 60000.0},
             owner_ss_by_name={"Primary": (67, 0.0)},
-            income_tax_rate=0.22,
-            capital_gains_tax_rate=0.15,
+            tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
+            capital_gains_brackets=capital_gains_brackets_for_status(
+                default_capital_gains_config(),
+                FILING_STATUS_SINGLE,
+            ),
         )
         self.assertEqual(follow_on[0].salary_income, 0.0)
         self.assertGreater(follow_on[0].withdrawn_total, 0.0)
@@ -163,8 +204,11 @@ class CalculationTests(unittest.TestCase):
             owner_retirement_age_by_name={"Primary": 65},
             owner_salary_by_name={"Primary": 60000.0},
             owner_ss_by_name={"Primary": (67, 0.0)},
-            income_tax_rate=0.0,
-            capital_gains_tax_rate=0.0,
+            tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
+            capital_gains_brackets=capital_gains_brackets_for_status(
+                default_capital_gains_config(),
+                FILING_STATUS_SINGLE,
+            ),
         )
 
         self.assertEqual(len(projection), 1)

@@ -1,0 +1,27 @@
+{
+  "config_version": 1,
+  "source_url": "https://www.irs.gov/newsroom/irs-releases-tax-inflation-adjustments-for-tax-year-2026-including-amendments-from-the-one-big-beautiful-bill",
+  "source_page_url": "https://www.irs.gov/filing/federal-income-tax-rates-and-brackets",
+  "fetched_at": "2026-10-09T00:00:00+00:00",
+  "tax_year": 2026,
+  "tables": {
+    "single": [
+      {"lower_bound": 0.0, "upper_bound": 12400.0, "rate": 0.1},
+      {"lower_bound": 12400.0, "upper_bound": 50400.0, "rate": 0.12},
+      {"lower_bound": 50400.0, "upper_bound": 105700.0, "rate": 0.22},
+      {"lower_bound": 105700.0, "upper_bound": 201775.0, "rate": 0.24},
+      {"lower_bound": 201775.0, "upper_bound": 256225.0, "rate": 0.32},
+      {"lower_bound": 256225.0, "upper_bound": 640600.0, "rate": 0.35},
+      {"lower_bound": 640600.0, "upper_bound": null, "rate": 0.37}
+    ],
+    "married_filing_jointly": [
+      {"lower_bound": 0.0, "upper_bound": 24800.0, "rate": 0.1},
+      {"lower_bound": 24800.0, "upper_bound": 100800.0, "rate": 0.12},
+      {"lower_bound": 100800.0, "upper_bound": 211400.0, "rate": 0.22},
+      {"lower_bound": 211400.0, "upper_bound": 403550.0, "rate": 0.24},
+      {"lower_bound": 403550.0, "upper_bound": 512450.0, "rate": 0.32},
+      {"lower_bound": 512450.0, "upper_bound": 768700.0, "rate": 0.35},
+      {"lower_bound": 768700.0, "upper_bound": null, "rate": 0.37}
+    ]
+  }
+}
