@@ -32,6 +32,9 @@ class WithdrawalSource:
 @dataclass
 class YearProjection:
     year_index: int
+    calendar_year: int
+    user_age: int
+    spouse_age: int | None
     withdrawn_total: float
     social_security_income: float
     ordinary_income: float
@@ -41,6 +44,7 @@ class YearProjection:
     net_income: float
     ending_balance: float
     shortfall: float
+    withdrawal_by_account_type: dict[str, float] = field(default_factory=dict)
     withdrawal_sources: list[WithdrawalSource] = field(default_factory=list)
 
 
@@ -214,6 +218,8 @@ def simulate_retirement(
     capital_gains_tax_rate: float,
 ) -> list[YearProjection]:
     projections: list[YearProjection] = []
+    base_year = date.today().year
+    account_type_keys = [account_type.value for account_type in AccountType]
 
     for year_index in range(1, years + 1):
         total_remaining_before = sum(account.balance for account in accounts)
@@ -236,7 +242,12 @@ def simulate_retirement(
         withdrawals, shortfall = optimize_withdrawals(accounts, owner_ages, needed_withdrawal)
         breakdown = classify_withdrawals(withdrawals)
         sources: list[WithdrawalSource] = []
+        withdrawal_by_account_type = {key: 0.0 for key in account_type_keys}
         for account, amount in withdrawals:
+            withdrawal_by_account_type[account.account_type.value] = round(
+                withdrawal_by_account_type[account.account_type.value] + amount,
+                2,
+            )
             sources.append(
                 WithdrawalSource(
                     owner=account.owner,
@@ -262,6 +273,9 @@ def simulate_retirement(
         projections.append(
             YearProjection(
                 year_index=year_index,
+                calendar_year=base_year + (year_index - 1),
+                user_age=owner_ages.get("Primary", 0),
+                spouse_age=owner_ages.get("Spouse"),
                 withdrawn_total=withdrawn_total,
                 social_security_income=round(social_security_income, 2),
                 ordinary_income=round(breakdown.ordinary_income, 2),
@@ -271,6 +285,7 @@ def simulate_retirement(
                 net_income=net_income,
                 ending_balance=ending_balance,
                 shortfall=shortfall,
+                withdrawal_by_account_type=withdrawal_by_account_type,
                 withdrawal_sources=sources,
             )
         )

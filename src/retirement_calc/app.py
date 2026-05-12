@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import tkinter as tk
 from datetime import date
 from tkinter import filedialog, messagebox, ttk
@@ -20,12 +21,22 @@ ACCOUNT_TYPE_LABELS = {
 }
 
 LABEL_TO_ACCOUNT_TYPE = {label: account_type for account_type, label in ACCOUNT_TYPE_LABELS.items()}
+ACCOUNT_TYPE_EXPORT_COLUMNS = [
+    AccountType.K401_NON_ROTH,
+    AccountType.K401_ROTH,
+    AccountType.B403_NON_ROTH,
+    AccountType.B403_ROTH,
+    AccountType.IRA_TRADITIONAL,
+    AccountType.IRA_ROTH,
+    AccountType.TAXABLE_INVESTMENT,
+]
 ASSET_CLASS_LABELS = {
     AssetClass.STOCKS: "Stocks",
     AssetClass.BONDS: "Bonds",
     AssetClass.CASH: "Cash",
 }
 LABEL_TO_ASSET_CLASS = {label: asset_class for asset_class, label in ASSET_CLASS_LABELS.items()}
+SETTINGS_VERSION = 1
 
 
 def _parse_date(value: str) -> date:
@@ -227,6 +238,172 @@ class RetirementApp:
 
         ttk.Button(frame, text="Calculate Plan", command=self.calculate_plan).grid(row=1, column=5, padx=10, pady=4)
         ttk.Button(frame, text="Export CSV", command=self.export_projection_csv).grid(row=1, column=6, padx=10, pady=4)
+        ttk.Button(frame, text="Export Settings", command=self.export_settings_json).grid(row=1, column=7, padx=10, pady=4)
+        ttk.Button(frame, text="Import Settings", command=self.import_settings_json).grid(row=1, column=8, padx=10, pady=4)
+
+    @staticmethod
+    def _to_bool(value: object) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        if isinstance(value, (int, float)):
+            return bool(value)
+        return False
+
+    def _collect_settings_snapshot(self) -> dict[str, object]:
+        return {
+            "settings_version": SETTINGS_VERSION,
+            "people": {
+                "primary": {
+                    "name": self.primary_name_var.get(),
+                    "birth_date": self.primary_birth_var.get(),
+                    "target_retirement_age": self.primary_ret_age_var.get(),
+                    "social_security_start_age": self.primary_ss_age_var.get(),
+                    "social_security_monthly": self.primary_ss_monthly_var.get(),
+                },
+                "include_spouse": self.include_spouse_var.get(),
+                "spouse": {
+                    "name": self.spouse_name_var.get(),
+                    "birth_date": self.spouse_birth_var.get(),
+                    "target_retirement_age": self.spouse_ret_age_var.get(),
+                    "social_security_start_age": self.spouse_ss_age_var.get(),
+                    "social_security_monthly": self.spouse_ss_monthly_var.get(),
+                },
+            },
+            "plan": {
+                "withdrawal_mode": self.withdrawal_mode_var.get(),
+                "withdrawal_value": self.withdrawal_value_var.get(),
+                "projection_years": self.projection_years_var.get(),
+                "income_tax_rate": self.income_tax_rate_var.get(),
+                "capital_gains_tax_rate": self.cap_gains_tax_rate_var.get(),
+            },
+            "return_profile": {
+                "use_default_returns": self.use_default_returns_var.get(),
+                "stocks_return_percent": self.default_stock_return_var.get(),
+                "bonds_return_percent": self.default_bond_return_var.get(),
+                "cash_return_percent": self.default_cash_return_var.get(),
+            },
+            "accounts": [
+                {
+                    "owner": account.owner,
+                    "name": account.name,
+                    "account_type": account.account_type.value,
+                    "asset_class": account.asset_class.value,
+                    "balance": account.balance,
+                    "annual_return_rate": account.annual_return_rate,
+                    "cost_basis": account.cost_basis,
+                }
+                for account in self.accounts
+            ],
+        }
+
+    def _apply_settings_snapshot(self, payload: dict[str, object]) -> None:
+        people = payload.get("people", {})
+        if not isinstance(people, dict):
+            raise ValueError("Invalid settings: people section is missing or invalid.")
+        primary = people.get("primary", {})
+        spouse = people.get("spouse", {})
+        plan = payload.get("plan", {})
+        return_profile = payload.get("return_profile", {})
+        accounts_data = payload.get("accounts", [])
+
+        if not isinstance(primary, dict) or not isinstance(spouse, dict):
+            raise ValueError("Invalid settings: person details are invalid.")
+        if not isinstance(plan, dict) or not isinstance(return_profile, dict):
+            raise ValueError("Invalid settings: plan or return profile is invalid.")
+        if not isinstance(accounts_data, list):
+            raise ValueError("Invalid settings: accounts must be an array.")
+
+        self.primary_name_var.set(str(primary.get("name", self.primary_name_var.get())))
+        self.primary_birth_var.set(str(primary.get("birth_date", self.primary_birth_var.get())))
+        self.primary_ret_age_var.set(str(primary.get("target_retirement_age", self.primary_ret_age_var.get())))
+        self.primary_ss_age_var.set(str(primary.get("social_security_start_age", self.primary_ss_age_var.get())))
+        self.primary_ss_monthly_var.set(str(primary.get("social_security_monthly", self.primary_ss_monthly_var.get())))
+
+        self.include_spouse_var.set(self._to_bool(people.get("include_spouse", self.include_spouse_var.get())))
+        self.spouse_name_var.set(str(spouse.get("name", self.spouse_name_var.get())))
+        self.spouse_birth_var.set(str(spouse.get("birth_date", self.spouse_birth_var.get())))
+        self.spouse_ret_age_var.set(str(spouse.get("target_retirement_age", self.spouse_ret_age_var.get())))
+        self.spouse_ss_age_var.set(str(spouse.get("social_security_start_age", self.spouse_ss_age_var.get())))
+        self.spouse_ss_monthly_var.set(str(spouse.get("social_security_monthly", self.spouse_ss_monthly_var.get())))
+
+        self.withdrawal_mode_var.set(str(plan.get("withdrawal_mode", self.withdrawal_mode_var.get())))
+        self.withdrawal_value_var.set(str(plan.get("withdrawal_value", self.withdrawal_value_var.get())))
+        self.projection_years_var.set(str(plan.get("projection_years", self.projection_years_var.get())))
+        self.income_tax_rate_var.set(str(plan.get("income_tax_rate", self.income_tax_rate_var.get())))
+        self.cap_gains_tax_rate_var.set(str(plan.get("capital_gains_tax_rate", self.cap_gains_tax_rate_var.get())))
+
+        self.use_default_returns_var.set(
+            self._to_bool(return_profile.get("use_default_returns", self.use_default_returns_var.get()))
+        )
+        self.default_stock_return_var.set(
+            str(return_profile.get("stocks_return_percent", self.default_stock_return_var.get()))
+        )
+        self.default_bond_return_var.set(
+            str(return_profile.get("bonds_return_percent", self.default_bond_return_var.get()))
+        )
+        self.default_cash_return_var.set(
+            str(return_profile.get("cash_return_percent", self.default_cash_return_var.get()))
+        )
+
+        loaded_accounts: list[Account] = []
+        for item in accounts_data:
+            if not isinstance(item, dict):
+                continue
+            account_type = AccountType(str(item.get("account_type", AccountType.K401_NON_ROTH.value)))
+            asset_class = AssetClass(str(item.get("asset_class", AssetClass.STOCKS.value)))
+            loaded_accounts.append(
+                Account(
+                    owner=str(item.get("owner", "Primary")),
+                    name=str(item.get("name", ACCOUNT_TYPE_LABELS[account_type])),
+                    account_type=account_type,
+                    balance=float(item.get("balance", 0.0)),
+                    asset_class=asset_class,
+                    annual_return_rate=float(item.get("annual_return_rate", 0.05)),
+                    cost_basis=float(item.get("cost_basis", 0.0)),
+                )
+            )
+
+        self.accounts = loaded_accounts
+        self.last_projection = []
+        self.results_text.delete("1.0", tk.END)
+        self.results_text.insert(tk.END, "Settings imported. Click Calculate Plan to regenerate projection.\n")
+        self._refresh_accounts_tree()
+
+    def export_settings_json(self) -> None:
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json")],
+            title="Export Retirement Settings",
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8") as settings_file:
+                json.dump(self._collect_settings_snapshot(), settings_file, indent=2)
+            messagebox.showinfo("Export complete", f"Settings exported to:\n{path}")
+        except Exception as exc:
+            messagebox.showerror("Export failed", str(exc))
+
+    def import_settings_json(self) -> None:
+        path = filedialog.askopenfilename(
+            filetypes=[("JSON files", "*.json")],
+            title="Import Retirement Settings",
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as settings_file:
+                payload = json.load(settings_file)
+            if not isinstance(payload, dict):
+                raise ValueError("Settings file must contain a JSON object.")
+            self._apply_settings_snapshot(payload)
+            messagebox.showinfo("Import complete", f"Settings imported from:\n{path}")
+        except Exception as exc:
+            messagebox.showerror("Import failed", str(exc))
 
     def _asset_class_default_rate(self, asset_class: AssetClass) -> float:
         if asset_class == AssetClass.STOCKS:
@@ -356,18 +533,32 @@ class RetirementApp:
             self.results_text.insert(tk.END, "No projection results generated.\n")
             return
 
+        account_type_headers = " | ".join(
+            [ACCOUNT_TYPE_LABELS[account_type] for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS]
+        )
         self.results_text.insert(
             tk.END,
-            "Year | Withdrawn | SS Income | Ordinary | Taxable SS | Cap Gains | Taxes | Net Income | End Balance | Shortfall\n",
+            "Year | Calendar Year | User Age | Spouse Age | Withdrawn | SS Income | Ordinary | "
+            "Taxable SS | Cap Gains | Taxes | Net Income | End Balance | Shortfall | "
+            f"{account_type_headers}\n",
         )
-        self.results_text.insert(tk.END, "-" * 122 + "\n")
+        self.results_text.insert(tk.END, "-" * 260 + "\n")
 
         total_taxes = 0.0
         for item in projection:
             total_taxes += item.taxes
+            account_type_values = " | ".join(
+                [
+                    f"{item.withdrawal_by_account_type.get(account_type.value, 0.0):,.2f}"
+                    for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS
+                ]
+            )
             self.results_text.insert(
                 tk.END,
                 f"{item.year_index:>4} | "
+                f"{item.calendar_year:>13} | "
+                f"{item.user_age:>8} | "
+                f"{(item.spouse_age if item.spouse_age is not None else 'N/A'):>10} | "
                 f"{item.withdrawn_total:>10,.2f} | "
                 f"{item.social_security_income:>9,.2f} | "
                 f"{item.ordinary_income:>8,.2f} | "
@@ -376,7 +567,8 @@ class RetirementApp:
                 f"{item.taxes:>7,.2f} | "
                 f"{item.net_income:>10,.2f} | "
                 f"{item.ending_balance:>11,.2f} | "
-                f"{item.shortfall:>8,.2f}\n"
+                f"{item.shortfall:>8,.2f} | "
+                f"{account_type_values}\n"
             )
             if item.withdrawal_sources:
                 for source in item.withdrawal_sources:
@@ -410,6 +602,9 @@ class RetirementApp:
                 writer.writerow(
                     [
                         "year",
+                        "calendar_year",
+                        "user_age",
+                        "spouse_age",
                         "withdrawn_total",
                         "social_security_income",
                         "ordinary_income",
@@ -419,6 +614,7 @@ class RetirementApp:
                         "net_income",
                         "ending_balance",
                         "shortfall",
+                        *[account_type.value for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS],
                         "withdrawal_sources",
                     ]
                 )
@@ -435,6 +631,9 @@ class RetirementApp:
                     writer.writerow(
                         [
                             year.year_index,
+                            year.calendar_year,
+                            year.user_age,
+                            "" if year.spouse_age is None else year.spouse_age,
                             f"{year.withdrawn_total:.2f}",
                             f"{year.social_security_income:.2f}",
                             f"{year.ordinary_income:.2f}",
@@ -444,6 +643,10 @@ class RetirementApp:
                             f"{year.net_income:.2f}",
                             f"{year.ending_balance:.2f}",
                             f"{year.shortfall:.2f}",
+                            *[
+                                f"{year.withdrawal_by_account_type.get(account_type.value, 0.0):.2f}"
+                                for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS
+                            ],
                             sources,
                         ]
                     )
