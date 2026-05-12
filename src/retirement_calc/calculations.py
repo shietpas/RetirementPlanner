@@ -46,6 +46,7 @@ class YearProjection:
     withdrawn_total: float
     salary_income: float
     social_security_income: float
+    pension_income: float
     ordinary_income: float
     taxable_social_security: float
     capital_gains: float
@@ -248,6 +249,7 @@ def simulate_retirement(
     owner_retirement_age_by_name: dict[str, int],
     owner_salary_by_name: dict[str, float],
     owner_ss_by_name: dict[str, tuple[int | None, float]],
+    owner_pension_by_name: dict[str, tuple[int | None, float]] | None,
     tax_brackets: list[dict[str, float | None]],
     capital_gains_brackets: list[dict[str, float | None]],
     annual_return_volatility: float = 0.0,
@@ -258,6 +260,7 @@ def simulate_retirement(
     base_year = date.today().year
     account_type_keys = [account_type.value for account_type in AccountType]
     rng = random.Random(random_seed)
+    pension_config = owner_pension_by_name or {}
 
     for year_index in range(1, years + 1):
         total_remaining_before = sum(account.balance for account in accounts)
@@ -291,6 +294,12 @@ def simulate_retirement(
             if start_age is not None and owner_age >= start_age:
                 social_security_income += monthly_amount * 12.0
 
+        pension_income = 0.0
+        for owner, (start_age, monthly_amount) in pension_config.items():
+            owner_age = owner_ages.get(owner, 0)
+            if start_age is not None and owner_age >= start_age:
+                pension_income += monthly_amount * 12.0
+
         withdrawals, shortfall = optimize_withdrawals(accounts, owner_ages, retired_owners, needed_withdrawal)
         breakdown = classify_withdrawals(withdrawals)
         sources: list[WithdrawalSource] = []
@@ -310,7 +319,10 @@ def simulate_retirement(
                 )
             )
         taxable_social_security = round(social_security_income * 0.85, 2)
-        ordinary_taxable_income = round(salary_income + breakdown.ordinary_income + taxable_social_security, 2)
+        ordinary_taxable_income = round(
+            salary_income + pension_income + breakdown.ordinary_income + taxable_social_security,
+            2,
+        )
         ordinary_income_tax = calculate_progressive_tax(ordinary_taxable_income, tax_brackets)
         capital_gains_tax = calculate_capital_gains_tax(
             ordinary_taxable_income,
@@ -319,7 +331,7 @@ def simulate_retirement(
         )
         taxes = round(ordinary_income_tax + capital_gains_tax, 2)
         withdrawn_total = round(sum(amount for _, amount in withdrawals), 2)
-        net_income = round(withdrawn_total + salary_income + social_security_income - taxes, 2)
+        net_income = round(withdrawn_total + salary_income + social_security_income + pension_income - taxes, 2)
 
         pre_growth_balance_total = sum(account.balance for account in accounts)
         weighted_rate_numerator = 0.0
@@ -344,6 +356,7 @@ def simulate_retirement(
                 withdrawn_total=withdrawn_total,
                 salary_income=round(salary_income, 2),
                 social_security_income=round(social_security_income, 2),
+                pension_income=round(pension_income, 2),
                 ordinary_income=round(breakdown.ordinary_income, 2),
                 taxable_social_security=taxable_social_security,
                 capital_gains=round(breakdown.capital_gains, 2),
@@ -371,6 +384,7 @@ def simulate_retirement_scenarios(
     owner_retirement_age_by_name: dict[str, int],
     owner_salary_by_name: dict[str, float],
     owner_ss_by_name: dict[str, tuple[int | None, float]],
+    owner_pension_by_name: dict[str, tuple[int | None, float]] | None,
     tax_brackets: list[dict[str, float | None]],
     capital_gains_brackets: list[dict[str, float | None]],
     annual_return_volatility: float,
@@ -408,6 +422,7 @@ def simulate_retirement_scenarios(
             owner_retirement_age_by_name=owner_retirement_age_by_name,
             owner_salary_by_name=owner_salary_by_name,
             owner_ss_by_name=owner_ss_by_name,
+            owner_pension_by_name=owner_pension_by_name,
             tax_brackets=tax_brackets,
             capital_gains_brackets=capital_gains_brackets,
             annual_return_volatility=annual_return_volatility,

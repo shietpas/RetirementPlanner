@@ -71,6 +71,9 @@ class RetirementApp:
         self.primary_salary_var = tk.StringVar(value="120000")
         self.primary_ss_age_var = tk.StringVar(value="67")
         self.primary_ss_monthly_var = tk.StringVar(value="2500")
+        self.primary_has_pension_var = tk.BooleanVar(value=False)
+        self.primary_pension_age_var = tk.StringVar(value="65")
+        self.primary_pension_monthly_var = tk.StringVar(value="0")
 
         self.include_spouse_var = tk.BooleanVar(value=False)
         self.spouse_name_var = tk.StringVar(value="Spouse")
@@ -79,6 +82,9 @@ class RetirementApp:
         self.spouse_salary_var = tk.StringVar(value="90000")
         self.spouse_ss_age_var = tk.StringVar(value="67")
         self.spouse_ss_monthly_var = tk.StringVar(value="2000")
+        self.spouse_has_pension_var = tk.BooleanVar(value=False)
+        self.spouse_pension_age_var = tk.StringVar(value="65")
+        self.spouse_pension_monthly_var = tk.StringVar(value="0")
 
         self.account_owner_var = tk.StringVar(value="Primary")
         self.account_name_var = tk.StringVar(value="")
@@ -101,6 +107,9 @@ class RetirementApp:
         self.capital_gains_table_config = load_capital_gains_config()
         self.include_spouse_var.trace_add("write", lambda *_: self._update_tax_table_status())
         self.include_spouse_var.trace_add("write", lambda *_: self._update_capital_gains_table_status())
+        self.include_spouse_var.trace_add("write", lambda *_: self._toggle_pension_inputs())
+        self.primary_has_pension_var.trace_add("write", lambda *_: self._toggle_pension_inputs())
+        self.spouse_has_pension_var.trace_add("write", lambda *_: self._toggle_pension_inputs())
 
         self._build_ui()
         self._update_tax_table_status()
@@ -174,6 +183,16 @@ class RetirementApp:
         ttk.Label(frame, text="Primary Annual Salary").grid(row=0, column=5, sticky="w", padx=6, pady=4)
         ttk.Entry(frame, textvariable=self.primary_salary_var, width=12).grid(row=1, column=5, padx=6, pady=4)
 
+        ttk.Checkbutton(frame, text="Primary Has Pension", variable=self.primary_has_pension_var).grid(
+            row=2, column=1, sticky="w", padx=6, pady=(8, 4)
+        )
+        ttk.Label(frame, text="Primary Pension Start Age").grid(row=2, column=2, sticky="w", padx=6, pady=(8, 4))
+        self.primary_pension_age_entry = ttk.Entry(frame, textvariable=self.primary_pension_age_var, width=8)
+        self.primary_pension_age_entry.grid(row=2, column=3, padx=6, pady=(8, 4), sticky="w")
+        ttk.Label(frame, text="Primary Pension Monthly").grid(row=2, column=4, sticky="w", padx=6, pady=(8, 4))
+        self.primary_pension_monthly_entry = ttk.Entry(frame, textvariable=self.primary_pension_monthly_var, width=10)
+        self.primary_pension_monthly_entry.grid(row=2, column=5, padx=6, pady=(8, 4), sticky="w")
+
         ttk.Checkbutton(frame, text="Include Spouse", variable=self.include_spouse_var).grid(
             row=2, column=0, sticky="w", padx=6, pady=(8, 4)
         )
@@ -190,6 +209,26 @@ class RetirementApp:
         ttk.Entry(frame, textvariable=self.spouse_ss_monthly_var, width=10).grid(row=4, column=4, padx=6, pady=4)
         ttk.Label(frame, text="Spouse Annual Salary").grid(row=3, column=5, sticky="w", padx=6, pady=4)
         ttk.Entry(frame, textvariable=self.spouse_salary_var, width=12).grid(row=4, column=5, padx=6, pady=4)
+
+        ttk.Checkbutton(frame, text="Spouse Has Pension", variable=self.spouse_has_pension_var).grid(
+            row=5, column=1, sticky="w", padx=6, pady=(8, 4)
+        )
+        ttk.Label(frame, text="Spouse Pension Start Age").grid(row=5, column=2, sticky="w", padx=6, pady=(8, 4))
+        self.spouse_pension_age_entry = ttk.Entry(frame, textvariable=self.spouse_pension_age_var, width=8)
+        self.spouse_pension_age_entry.grid(row=5, column=3, padx=6, pady=(8, 4), sticky="w")
+        ttk.Label(frame, text="Spouse Pension Monthly").grid(row=5, column=4, sticky="w", padx=6, pady=(8, 4))
+        self.spouse_pension_monthly_entry = ttk.Entry(frame, textvariable=self.spouse_pension_monthly_var, width=10)
+        self.spouse_pension_monthly_entry.grid(row=5, column=5, padx=6, pady=(8, 4), sticky="w")
+        self._toggle_pension_inputs()
+
+    def _toggle_pension_inputs(self) -> None:
+        self.primary_pension_age_entry.configure(state="normal" if self.primary_has_pension_var.get() else "disabled")
+        self.primary_pension_monthly_entry.configure(
+            state="normal" if self.primary_has_pension_var.get() else "disabled"
+        )
+        spouse_enabled = self.include_spouse_var.get() and self.spouse_has_pension_var.get()
+        self.spouse_pension_age_entry.configure(state="normal" if spouse_enabled else "disabled")
+        self.spouse_pension_monthly_entry.configure(state="normal" if spouse_enabled else "disabled")
 
     def _build_accounts_section(self, frame: ttk.LabelFrame) -> None:
         ttk.Label(frame, text="Owner").grid(row=0, column=0, sticky="w", padx=6, pady=4)
@@ -326,6 +365,9 @@ class RetirementApp:
                     "annual_salary": self.primary_salary_var.get(),
                     "social_security_start_age": self.primary_ss_age_var.get(),
                     "social_security_monthly": self.primary_ss_monthly_var.get(),
+                    "has_pension": self.primary_has_pension_var.get(),
+                    "pension_start_age": self.primary_pension_age_var.get(),
+                    "pension_monthly": self.primary_pension_monthly_var.get(),
                 },
                 "include_spouse": self.include_spouse_var.get(),
                 "spouse": {
@@ -335,6 +377,9 @@ class RetirementApp:
                     "annual_salary": self.spouse_salary_var.get(),
                     "social_security_start_age": self.spouse_ss_age_var.get(),
                     "social_security_monthly": self.spouse_ss_monthly_var.get(),
+                    "has_pension": self.spouse_has_pension_var.get(),
+                    "pension_start_age": self.spouse_pension_age_var.get(),
+                    "pension_monthly": self.spouse_pension_monthly_var.get(),
                 },
             },
             "plan": {
@@ -394,6 +439,9 @@ class RetirementApp:
         self.primary_salary_var.set(str(primary.get("annual_salary", self.primary_salary_var.get())))
         self.primary_ss_age_var.set(str(primary.get("social_security_start_age", self.primary_ss_age_var.get())))
         self.primary_ss_monthly_var.set(str(primary.get("social_security_monthly", self.primary_ss_monthly_var.get())))
+        self.primary_has_pension_var.set(self._to_bool(primary.get("has_pension", self.primary_has_pension_var.get())))
+        self.primary_pension_age_var.set(str(primary.get("pension_start_age", self.primary_pension_age_var.get())))
+        self.primary_pension_monthly_var.set(str(primary.get("pension_monthly", self.primary_pension_monthly_var.get())))
 
         self.include_spouse_var.set(self._to_bool(people.get("include_spouse", self.include_spouse_var.get())))
         self.spouse_name_var.set(str(spouse.get("name", self.spouse_name_var.get())))
@@ -402,6 +450,10 @@ class RetirementApp:
         self.spouse_salary_var.set(str(spouse.get("annual_salary", self.spouse_salary_var.get())))
         self.spouse_ss_age_var.set(str(spouse.get("social_security_start_age", self.spouse_ss_age_var.get())))
         self.spouse_ss_monthly_var.set(str(spouse.get("social_security_monthly", self.spouse_ss_monthly_var.get())))
+        self.spouse_has_pension_var.set(self._to_bool(spouse.get("has_pension", self.spouse_has_pension_var.get())))
+        self.spouse_pension_age_var.set(str(spouse.get("pension_start_age", self.spouse_pension_age_var.get())))
+        self.spouse_pension_monthly_var.set(str(spouse.get("pension_monthly", self.spouse_pension_monthly_var.get())))
+        self._toggle_pension_inputs()
 
         self.withdrawal_mode_var.set(str(plan.get("withdrawal_mode", self.withdrawal_mode_var.get())))
         self.withdrawal_value_var.set(str(plan.get("withdrawal_value", self.withdrawal_value_var.get())))
@@ -677,6 +729,16 @@ class RetirementApp:
             ss["Spouse"] = (spouse_start, float(self.spouse_ss_monthly_var.get()))
         return ss
 
+    def _owner_pension_config(self) -> dict[str, tuple[int | None, float]]:
+        pension: dict[str, tuple[int | None, float]] = {}
+        if self.primary_has_pension_var.get():
+            primary_start = int(self.primary_pension_age_var.get()) if self.primary_pension_age_var.get().strip() else None
+            pension["Primary"] = (primary_start, float(self.primary_pension_monthly_var.get()))
+        if self.include_spouse_var.get() and self.spouse_has_pension_var.get():
+            spouse_start = int(self.spouse_pension_age_var.get()) if self.spouse_pension_age_var.get().strip() else None
+            pension["Spouse"] = (spouse_start, float(self.spouse_pension_monthly_var.get()))
+        return pension
+
     def _owner_retirement_age_config(self) -> dict[str, int]:
         retirement_ages = {"Primary": int(self.primary_ret_age_var.get())}
         if self.include_spouse_var.get():
@@ -710,6 +772,7 @@ class RetirementApp:
             owner_retirement_age_by_name = self._owner_retirement_age_config()
             owner_salary_by_name = self._owner_salary_config()
             owner_ss_by_name = self._owner_ss_config()
+            owner_pension_by_name = self._owner_pension_config()
             projection_by_scenario = simulate_retirement_scenarios(
                 accounts=self.accounts,
                 years=years,
@@ -719,6 +782,7 @@ class RetirementApp:
                 owner_retirement_age_by_name=owner_retirement_age_by_name,
                 owner_salary_by_name=owner_salary_by_name,
                 owner_ss_by_name=owner_ss_by_name,
+                owner_pension_by_name=owner_pension_by_name,
                 tax_brackets=tax_brackets,
                 capital_gains_brackets=capital_gains_brackets,
                 annual_return_volatility=annual_return_volatility,
@@ -772,11 +836,11 @@ class RetirementApp:
         )
         self.results_text.insert(
             tk.END,
-            "Year | Calendar Year | User Age | Spouse Age | Withdrawn | Salary | SS Income | Ordinary | "
+            "Year | Calendar Year | User Age | Spouse Age | Withdrawn | Salary | SS Income | Pension | Ordinary | "
             "Taxable SS | Cap Gains | Taxes | Net Income | End Balance | Shortfall | Return % | Gain/Loss | Market Adj % | "
             f"{account_type_headers}\n",
         )
-        self.results_text.insert(tk.END, "-" * 308 + "\n")
+        self.results_text.insert(tk.END, "-" * 320 + "\n")
 
         total_taxes = 0.0
         for item in projection:
@@ -796,6 +860,7 @@ class RetirementApp:
                 f"{item.withdrawn_total:>10,.2f} | "
                 f"{item.salary_income:>8,.2f} | "
                 f"{item.social_security_income:>9,.2f} | "
+                f"{item.pension_income:>7,.2f} | "
                 f"{item.ordinary_income:>8,.2f} | "
                 f"{item.taxable_social_security:>10,.2f} | "
                 f"{item.capital_gains:>9,.2f} | "
@@ -847,6 +912,7 @@ class RetirementApp:
                         "withdrawn_total",
                         "salary_income",
                         "social_security_income",
+                        "pension_income",
                         "ordinary_income",
                         "taxable_social_security",
                         "capital_gains",
@@ -882,6 +948,7 @@ class RetirementApp:
                                 f"{year.withdrawn_total:.2f}",
                                 f"{year.salary_income:.2f}",
                                 f"{year.social_security_income:.2f}",
+                                f"{year.pension_income:.2f}",
                                 f"{year.ordinary_income:.2f}",
                                 f"{year.taxable_social_security:.2f}",
                                 f"{year.capital_gains:.2f}",

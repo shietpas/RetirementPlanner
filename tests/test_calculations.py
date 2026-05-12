@@ -113,6 +113,7 @@ class CalculationTests(unittest.TestCase):
             owner_retirement_age_by_name={"Primary": 64},
             owner_salary_by_name={"Primary": 0.0},
             owner_ss_by_name={"Primary": (67, 0.0)},
+            owner_pension_by_name=None,
             tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
             capital_gains_brackets=capital_gains_brackets_for_status(
                 default_capital_gains_config(),
@@ -146,6 +147,7 @@ class CalculationTests(unittest.TestCase):
             owner_retirement_age_by_name={"Primary": 55},
             owner_salary_by_name={"Primary": 60000.0},
             owner_ss_by_name={"Primary": (67, 0.0)},
+            owner_pension_by_name=None,
             tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
             capital_gains_brackets=capital_gains_brackets_for_status(
                 default_capital_gains_config(),
@@ -178,6 +180,7 @@ class CalculationTests(unittest.TestCase):
             owner_retirement_age_by_name={"Primary": 55},
             owner_salary_by_name={"Primary": 60000.0},
             owner_ss_by_name={"Primary": (67, 0.0)},
+            owner_pension_by_name=None,
             tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
             capital_gains_brackets=capital_gains_brackets_for_status(
                 default_capital_gains_config(),
@@ -205,6 +208,7 @@ class CalculationTests(unittest.TestCase):
             owner_retirement_age_by_name={"Primary": 65},
             owner_salary_by_name={"Primary": 60000.0},
             owner_ss_by_name={"Primary": (67, 0.0)},
+            owner_pension_by_name=None,
             tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
             capital_gains_brackets=capital_gains_brackets_for_status(
                 default_capital_gains_config(),
@@ -237,6 +241,7 @@ class CalculationTests(unittest.TestCase):
             owner_retirement_age_by_name={"Primary": 30},
             owner_salary_by_name={"Primary": 0.0},
             owner_ss_by_name={"Primary": (67, 0.0)},
+            owner_pension_by_name=None,
             tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
             capital_gains_brackets=capital_gains_brackets_for_status(
                 default_capital_gains_config(),
@@ -275,6 +280,7 @@ class CalculationTests(unittest.TestCase):
                 owner_retirement_age_by_name={"Primary": 40},
                 owner_salary_by_name={"Primary": 0.0},
                 owner_ss_by_name={"Primary": (67, 0.0)},
+                owner_pension_by_name=None,
                 tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
                 capital_gains_brackets=capital_gains_brackets_for_status(
                     default_capital_gains_config(),
@@ -293,6 +299,39 @@ class CalculationTests(unittest.TestCase):
             [year.ending_balance for year in projection_b],
         )
         self.assertTrue(any(abs(year.market_return_adjustment) > 0 for year in projection_a))
+
+    def test_pension_income_included_after_start_age(self):
+        projection = simulate_retirement(
+            accounts=[
+                Account(
+                    owner="Primary",
+                    name="IRA",
+                    account_type=AccountType.IRA_TRADITIONAL,
+                    balance=50000.0,
+                    stock_mix=0.5,
+                )
+            ],
+            years=1,
+            annual_withdrawal_value=0.0,
+            withdrawal_mode="flat",
+            owner_age_by_name={"Primary": 65},
+            owner_retirement_age_by_name={"Primary": 60},
+            owner_salary_by_name={"Primary": 0.0},
+            owner_ss_by_name={"Primary": (67, 0.0)},
+            owner_pension_by_name={"Primary": (65, 1000.0)},
+            tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
+            capital_gains_brackets=capital_gains_brackets_for_status(
+                default_capital_gains_config(),
+                FILING_STATUS_SINGLE,
+            ),
+            annual_return_volatility=0.0,
+            scenario_return_bias=0.0,
+            random_seed=1,
+        )
+
+        self.assertEqual(len(projection), 1)
+        self.assertEqual(projection[0].pension_income, 12000.0)
+        self.assertGreater(projection[0].taxes, 0.0)
 
 
 if __name__ == "__main__":
