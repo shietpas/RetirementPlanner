@@ -1,0 +1,278 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date
+
+from .models import (
+    ACCOUNT_TAX_TREATMENT,
+    NON_ROTH_TYPES,
+    RMD_ELIGIBLE_TYPES,
+    Account,
+    AccountType,
+    TaxTreatment,
+)
+
+
+@dataclass
+class TaxBreakdown:
+    ordinary_income: float
+    capital_gains: float
+    tax_free: float
+
+
+@dataclass
+class WithdrawalSource:
+    owner: str
+    account_name: str
+    account_type: str
+    amount: float
+    tax_treatment: str
+
+
+@dataclass
+class YearProjection:
+    year_index: int
+    withdrawn_total: float
+    social_security_income: float
+    ordinary_income: float
+    taxable_social_security: float
+    capital_gains: float
+    taxes: float
+    net_income: float
+    ending_balance: float
+    shortfall: float
+    withdrawal_sources: list[WithdrawalSource] = field(default_factory=list)
+
+
+RMD_UNIFORM_LIFETIME_FACTORS: dict[int, float] = {
+    72: 27.4,
+    73: 26.5,
+    74: 25.5,
+    75: 24.6,
+    76: 23.7,
+    77: 22.9,
+    78: 22.0,
+    79: 21.1,
+    80: 20.2,
+    81: 19.4,
+    82: 18.5,
+    83: 17.7,
+    84: 16.8,
+    85: 16.0,
+    86: 15.2,
+    87: 14.4,
+    88: 13.7,
+    89: 12.9,
+    90: 12.2,
+    91: 11.5,
+    92: 10.8,
+    93: 10.1,
+    94: 9.5,
+    95: 8.9,
+    96: 8.4,
+    97: 7.8,
+    98: 7.3,
+    99: 6.8,
+    100: 6.4,
+    101: 6.0,
+    102: 5.6,
+    103: 5.2,
+    104: 4.9,
+    105: 4.6,
+    106: 4.3,
+    107: 4.1,
+    108: 3.9,
+    109: 3.7,
+    110: 3.5,
+    111: 3.4,
+    112: 3.3,
+    113: 3.1,
+    114: 3.0,
+    115: 2.9,
+    116: 2.8,
+    117: 2.7,
+    118: 2.5,
+    119: 2.3,
+    120: 2.0,
+}
+
+
+def apply_annual_return(balance: float, annual_return_rate: float) -> float:
+    if balance < 0:
+        raise ValueError("balance must be >= 0")
+    return round(balance * (1.0 + annual_return_rate), 2)
+
+
+def account_tax_treatment(account_type: AccountType) -> TaxTreatment:
+    return ACCOUNT_TAX_TREATMENT[account_type]
+
+
+def classify_withdrawals(withdrawals: list[tuple[Account, float]]) -> TaxBreakdown:
+    ordinary_income = 0.0
+    capital_gains = 0.0
+    tax_free = 0.0
+
+    for account, amount in withdrawals:
+        if amount < 0:
+            raise ValueError("withdrawal amount must be >= 0")
+
+        treatment = account_tax_treatment(account.account_type)
+        if treatment == TaxTreatment.ORDINARY_INCOME:
+            ordinary_income += amount
+        elif treatment == TaxTreatment.CAPITAL_GAINS:
+            capital_gains += amount
+        else:
+            tax_free += amount
+
+    return TaxBreakdown(
+        ordinary_income=round(ordinary_income, 2),
+        capital_gains=round(capital_gains, 2),
+        tax_free=round(tax_free, 2),
+    )
+
+
+def apply_year_end_growth(accounts: list[Account]) -> list[Account]:
+    grown_accounts: list[Account] = []
+    for account in accounts:
+        grown_accounts.append(
+            Account(
+                owner=account.owner,
+                name=account.name,
+                account_type=account.account_type,
+                balance=apply_annual_return(account.balance, account.annual_return_rate),
+                asset_class=account.asset_class,
+                annual_return_rate=account.annual_return_rate,
+                cost_basis=account.cost_basis,
+            )
+        )
+    return grown_accounts
+
+
+def age_on_date(birth_date: date, as_of: date) -> int:
+    years = as_of.year - birth_date.year
+    had_birthday = (as_of.month, as_of.day) >= (birth_date.month, birth_date.day)
+    return years if had_birthday else years - 1
+
+
+def calculate_rmd(balance: float, age: int, account_type: AccountType) -> float:
+    if account_type not in RMD_ELIGIBLE_TYPES or age < 72:
+        return 0.0
+    factor = RMD_UNIFORM_LIFETIME_FACTORS.get(age, 2.0)
+    return round(balance / factor, 2)
+
+
+def _withdraw_from_account(account: Account, amount: float) -> float:
+    if amount <= 0:
+        return 0.0
+    actual = min(account.balance, amount)
+    account.balance = round(account.balance - actual, 2)
+    return actual
+
+
+def optimize_withdrawals(
+    accounts: list[Account],
+    owner_ages: dict[str, int],
+    needed_withdrawal: float,
+) -> tuple[list[tuple[Account, float]], float]:
+    withdrawals: list[tuple[Account, float]] = []
+    remaining_needed = max(0.0, needed_withdrawal)
+
+    for account in accounts:
+        age = owner_ages.get(account.owner, 0)
+        rmd_amount = calculate_rmd(account.balance, age, account.account_type)
+        taken = _withdraw_from_account(account, rmd_amount)
+        if taken > 0:
+            withdrawals.append((account, taken))
+            remaining_needed = max(0.0, remaining_needed - taken)
+
+    def priority_key(account: Account) -> int:
+        if account.account_type == AccountType.TAXABLE_INVESTMENT:
+            return 0
+        if account.account_type in NON_ROTH_TYPES:
+            return 1
+        return 2
+
+    for account in sorted(accounts, key=priority_key):
+        if remaining_needed <= 0:
+            break
+        taken = _withdraw_from_account(account, remaining_needed)
+        if taken > 0:
+            withdrawals.append((account, taken))
+            remaining_needed = max(0.0, remaining_needed - taken)
+
+    return withdrawals, round(remaining_needed, 2)
+
+
+def simulate_retirement(
+    accounts: list[Account],
+    years: int,
+    annual_withdrawal_value: float,
+    withdrawal_mode: str,
+    owner_age_by_name: dict[str, int],
+    owner_ss_by_name: dict[str, tuple[int | None, float]],
+    income_tax_rate: float,
+    capital_gains_tax_rate: float,
+) -> list[YearProjection]:
+    projections: list[YearProjection] = []
+
+    for year_index in range(1, years + 1):
+        total_remaining_before = sum(account.balance for account in accounts)
+        if total_remaining_before <= 0:
+            break
+
+        if withdrawal_mode == "distribute_years":
+            years_left = years - year_index + 1
+            needed_withdrawal = round(total_remaining_before / years_left, 2)
+        else:
+            needed_withdrawal = annual_withdrawal_value
+
+        owner_ages = {owner: age + (year_index - 1) for owner, age in owner_age_by_name.items()}
+        social_security_income = 0.0
+        for owner, (start_age, monthly_amount) in owner_ss_by_name.items():
+            owner_age = owner_ages.get(owner, 0)
+            if start_age is not None and owner_age >= start_age:
+                social_security_income += monthly_amount * 12.0
+
+        withdrawals, shortfall = optimize_withdrawals(accounts, owner_ages, needed_withdrawal)
+        breakdown = classify_withdrawals(withdrawals)
+        sources: list[WithdrawalSource] = []
+        for account, amount in withdrawals:
+            sources.append(
+                WithdrawalSource(
+                    owner=account.owner,
+                    account_name=account.name,
+                    account_type=account.account_type.value,
+                    amount=round(amount, 2),
+                    tax_treatment=account_tax_treatment(account.account_type).value,
+                )
+            )
+        taxable_social_security = round(social_security_income * 0.85, 2)
+        taxes = round(
+            (breakdown.ordinary_income + taxable_social_security) * income_tax_rate
+            + breakdown.capital_gains * capital_gains_tax_rate,
+            2,
+        )
+        withdrawn_total = round(sum(amount for _, amount in withdrawals), 2)
+        net_income = round(withdrawn_total + social_security_income - taxes, 2)
+
+        for account in accounts:
+            account.balance = apply_annual_return(account.balance, account.annual_return_rate)
+
+        ending_balance = round(sum(account.balance for account in accounts), 2)
+        projections.append(
+            YearProjection(
+                year_index=year_index,
+                withdrawn_total=withdrawn_total,
+                social_security_income=round(social_security_income, 2),
+                ordinary_income=round(breakdown.ordinary_income, 2),
+                taxable_social_security=taxable_social_security,
+                capital_gains=round(breakdown.capital_gains, 2),
+                taxes=taxes,
+                net_income=net_income,
+                ending_balance=ending_balance,
+                shortfall=shortfall,
+                withdrawal_sources=sources,
+            )
+        )
+
+    return projections
