@@ -312,36 +312,36 @@ class RetirementApp:
         ttk.Label(frame, text="Optimistic Bias %").grid(row=0, column=6, sticky="w", padx=6, pady=4)
         ttk.Entry(frame, textvariable=self.optimistic_bias_var, width=10).grid(row=1, column=6, padx=6, pady=4)
 
-        ttk.Label(frame, text="Tax Table").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(frame, text="Tax").grid(row=2, column=0, sticky="w", padx=6, pady=4)
         ttk.Label(frame, textvariable=self.tax_table_status_var).grid(row=2, column=1, columnspan=3, sticky="w", padx=6, pady=4)
 
-        ttk.Label(frame, text="Capital Gains Table").grid(row=2, column=4, sticky="w", padx=6, pady=4)
+        ttk.Label(frame, text="Cap Gains").grid(row=2, column=4, sticky="w", padx=6, pady=4)
         ttk.Label(frame, textvariable=self.cap_gains_table_status_var).grid(row=2, column=5, columnspan=2, sticky="w", padx=6, pady=4)
 
-        ttk.Button(frame, text="Calculate Plan", command=self.calculate_plan).grid(row=1, column=7, padx=10, pady=4)
+        ttk.Button(frame, text="Calculate Plan", command=self.calculate_plan).grid(row=3, column=0, padx=10, pady=4, sticky="w")
 
-        ttk.Label(frame, text="Settings").grid(row=3, column=0, sticky="w", padx=6, pady=(8, 4))
+        ttk.Label(frame, text="Settings").grid(row=4, column=0, sticky="w", padx=6, pady=(8, 4))
         ttk.Button(frame, text="Import Settings", command=self.import_settings_json).grid(
-            row=3, column=1, padx=6, pady=4, sticky="w"
+            row=4, column=1, padx=6, pady=4, sticky="w"
         )
         ttk.Button(frame, text="Export Settings", command=self.export_settings_json).grid(
-            row=3, column=2, padx=6, pady=4, sticky="w"
+            row=4, column=2, padx=6, pady=4, sticky="w"
         )
         ttk.Button(frame, text="Export CSV", command=self.export_projection_csv).grid(
-            row=3, column=3, padx=6, pady=4, sticky="w"
+            row=4, column=3, padx=6, pady=4, sticky="w"
         )
 
         ttk.Button(frame, text="Export Income Tax Table", command=self.export_income_tax_table_json).grid(
-            row=4, column=0, padx=6, pady=4, sticky="w"
+            row=5, column=0, padx=6, pady=4, sticky="w"
         )
         ttk.Button(frame, text="Refresh Income Tax Table", command=self.refresh_income_tax_table).grid(
-            row=4, column=1, padx=6, pady=4, sticky="w"
+            row=5, column=1, padx=6, pady=4, sticky="w"
         )
         ttk.Button(frame, text="Export Capital Gains Table", command=self.export_capital_gains_table_json).grid(
-            row=4, column=2, padx=6, pady=4, sticky="w"
+            row=5, column=2, padx=6, pady=4, sticky="w"
         )
         ttk.Button(frame, text="Refresh Capital Gains Table", command=self.refresh_capital_gains_table).grid(
-            row=4, column=3, padx=6, pady=4, sticky="w"
+            row=5, column=3, padx=6, pady=4, sticky="w"
         )
 
     @staticmethod
@@ -576,20 +576,20 @@ class RetirementApp:
 
     def _update_tax_table_status(self) -> None:
         tax_year = self.tax_table_config.get("tax_year", "unknown")
-        source_url = self.tax_table_config.get("source_url", "IRS")
+        source_url = self.tax_table_config.get("source_url", "IRS").split("/")[-1] if self.tax_table_config.get("source_url") else "IRS"
         filing_status = self._filing_status()
-        status_label = "Married Filing Jointly" if filing_status == FILING_STATUS_MARRIED_JOINT else "Single"
-        self.tax_table_status_var.set(f"{status_label} | IRS {tax_year} | {source_url}")
+        status_label = "MFJ" if filing_status == FILING_STATUS_MARRIED_JOINT else "S"
+        self.tax_table_status_var.set(f"{status_label} {tax_year}")
 
     def _capital_gains_status_filing(self) -> str:
         return CG_FILING_STATUS_MARRIED_JOINT if self.include_spouse_var.get() else CG_FILING_STATUS_SINGLE
 
     def _update_capital_gains_table_status(self) -> None:
         tax_year = self.capital_gains_table_config.get("tax_year", "unknown")
-        source_url = self.capital_gains_table_config.get("source_url", "IRS")
+        source_url = self.capital_gains_table_config.get("source_url", "IRS").split("/")[-1] if self.capital_gains_table_config.get("source_url") else "IRS"
         filing_status = self._capital_gains_status_filing()
-        status_label = "Married Filing Jointly" if filing_status == CG_FILING_STATUS_MARRIED_JOINT else "Single"
-        self.cap_gains_table_status_var.set(f"{status_label} | IRS {tax_year} | {source_url}")
+        status_label = "MFJ" if filing_status == CG_FILING_STATUS_MARRIED_JOINT else "S"
+        self.cap_gains_table_status_var.set(f"{status_label} {tax_year}")
 
     def refresh_income_tax_table(self) -> None:
         try:
