@@ -58,7 +58,7 @@ class YearProjection:
     annual_return_rate: float = 0.0
     annual_gain_loss: float = 0.0
     market_return_adjustment: float = 0.0
-    tax_bracket_rates: list[float] | None = None
+    effective_tax_rate: float = 0.0
     withdrawal_by_account_type: dict[str, float] = field(default_factory=dict)
     withdrawal_sources: list[WithdrawalSource] = field(default_factory=list)
 
@@ -361,15 +361,6 @@ def simulate_retirement(
         withdrawn_total = round(sum(amount for _, amount in withdrawals), 2)
         net_income = round(withdrawn_total + salary_income + social_security_income + pension_income - taxes, 2)
 
-        # Extract marginal tax rates from brackets for display
-        tax_bracket_rates: list[float] | None = None
-        if tax_brackets:
-            tax_bracket_rates = []
-            for bracket in tax_brackets:
-                rate = bracket.get('rate')
-                if rate is not None:
-                    tax_bracket_rates.append(rate)
-
         pre_growth_balance_total = sum(account.balance for account in accounts)
         weighted_rate_numerator = 0.0
         for account in accounts:
@@ -384,6 +375,8 @@ def simulate_retirement(
             else 0.0
         )
         annual_gain_loss = round(ending_balance - pre_growth_balance_total, 2)
+        gross_income_total = round(withdrawn_total + salary_income + social_security_income + pension_income, 2)
+        effective_tax_rate = round(taxes / gross_income_total, 6) if gross_income_total > 0 else 0.0
         projections.append(
             YearProjection(
                 year_index=year_index,
@@ -405,7 +398,7 @@ def simulate_retirement(
                 annual_return_rate=annual_return_rate,
                 annual_gain_loss=annual_gain_loss,
                 market_return_adjustment=round(stock_shock, 6),
-                tax_bracket_rates=tax_bracket_rates,
+                effective_tax_rate=effective_tax_rate,
                 withdrawal_by_account_type=withdrawal_by_account_type,
                 withdrawal_sources=sources,
             )

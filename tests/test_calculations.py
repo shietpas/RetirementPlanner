@@ -503,8 +503,8 @@ class CalculationTests(unittest.TestCase):
         # Ending balance should be: (50000 - 10000) * 1.075 = 43000
         self.assertAlmostEqual(projection[0].ending_balance, 43000.0, places=0)
 
-    def test_tax_bracket_rates_included(self):
-        """Verify that tax bracket rates are extracted and included in projection."""
+    def test_effective_tax_rate_included(self):
+        """Verify that effective tax rate is included in the projection."""
         projection = simulate_retirement(
             accounts=[
                 Account(
@@ -531,8 +531,9 @@ class CalculationTests(unittest.TestCase):
         )
 
         self.assertEqual(len(projection), 1)
-        self.assertIsNotNone(projection[0].tax_bracket_rates)
-        self.assertIsInstance(projection[0].tax_bracket_rates, list)
-        self.assertGreater(len(projection[0].tax_bracket_rates), 0)
-        # First rate should be less than last rate (progressive tax system)
-        self.assertLess(projection[0].tax_bracket_rates[0], projection[0].tax_bracket_rates[-1])
+        self.assertGreater(projection[0].effective_tax_rate, 0.0)
+        self.assertAlmostEqual(
+            projection[0].effective_tax_rate,
+            projection[0].taxes / projection[0].withdrawn_total,
+            places=6,
+        )
