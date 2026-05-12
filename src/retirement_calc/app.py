@@ -4,6 +4,7 @@ import csv
 import json
 import tkinter as tk
 from datetime import date
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from .calculations import YearProjection, age_on_date, simulate_retirement
@@ -14,6 +15,7 @@ from .capital_gains_tax_tables import (
     capital_gains_brackets_for_status,
     load_capital_gains_config,
     refresh_capital_gains_config,
+    save_capital_gains_config,
 )
 from .models import ASSET_CLASS_DEFAULT_RETURNS, Account, AccountType, AssetClass
 from .tax_tables import (
@@ -22,6 +24,7 @@ from .tax_tables import (
     CONFIG_PATH,
     load_tax_table_config,
     refresh_tax_table_config,
+    save_tax_table_config,
     tax_brackets_for_status,
 )
 
@@ -119,9 +122,11 @@ class RetirementApp:
 
         canvas = tk.Canvas(main_container, highlightthickness=0)
         vertical_scrollbar = ttk.Scrollbar(main_container, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=vertical_scrollbar.set)
+        horizontal_scrollbar = ttk.Scrollbar(main_container, orient="horizontal", command=canvas.xview)
+        canvas.configure(yscrollcommand=vertical_scrollbar.set, xscrollcommand=horizontal_scrollbar.set)
 
         vertical_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        horizontal_scrollbar.pack(side=tk.BOTTOM, fill=tk.X)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         outer = ttk.Frame(canvas, padding=12)
@@ -131,7 +136,8 @@ class RetirementApp:
             canvas.configure(scrollregion=canvas.bbox("all"))
 
         def _sync_outer_width(event: tk.Event) -> None:
-            canvas.itemconfigure(outer_window, width=event.width)
+            required_width = outer.winfo_reqwidth()
+            canvas.itemconfigure(outer_window, width=max(event.width, required_width))
 
         def _on_mousewheel(event: tk.Event) -> None:
             canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
@@ -291,10 +297,30 @@ class RetirementApp:
         ttk.Label(frame, textvariable=self.cap_gains_table_status_var).grid(row=2, column=1, columnspan=4, sticky="w", padx=6, pady=4)
 
         ttk.Button(frame, text="Calculate Plan", command=self.calculate_plan).grid(row=1, column=5, padx=10, pady=4)
-        ttk.Button(frame, text="Export CSV", command=self.export_projection_csv).grid(row=1, column=6, padx=10, pady=4)
-        ttk.Button(frame, text="Export Settings", command=self.export_settings_json).grid(row=1, column=7, padx=10, pady=4)
-        ttk.Button(frame, text="Import Settings", command=self.import_settings_json).grid(row=1, column=8, padx=10, pady=4)
-        ttk.Button(frame, text="Refresh IRS Tax Tables", command=self.refresh_tax_tables).grid(row=1, column=9, padx=10, pady=4)
+
+        ttk.Label(frame, text="Settings").grid(row=3, column=0, sticky="w", padx=6, pady=(8, 4))
+        ttk.Button(frame, text="Import Settings", command=self.import_settings_json).grid(
+            row=3, column=1, padx=6, pady=4, sticky="w"
+        )
+        ttk.Button(frame, text="Export Settings", command=self.export_settings_json).grid(
+            row=3, column=2, padx=6, pady=4, sticky="w"
+        )
+        ttk.Button(frame, text="Export CSV", command=self.export_projection_csv).grid(
+            row=3, column=3, padx=6, pady=4, sticky="w"
+        )
+
+        ttk.Button(frame, text="Export Income Tax Table", command=self.export_income_tax_table_json).grid(
+            row=4, column=0, padx=6, pady=4, sticky="w"
+        )
+        ttk.Button(frame, text="Refresh Income Tax Table", command=self.refresh_income_tax_table).grid(
+            row=4, column=1, padx=6, pady=4, sticky="w"
+        )
+        ttk.Button(frame, text="Export Capital Gains Table", command=self.export_capital_gains_table_json).grid(
+            row=4, column=2, padx=6, pady=4, sticky="w"
+        )
+        ttk.Button(frame, text="Refresh Capital Gains Table", command=self.refresh_capital_gains_table).grid(
+            row=4, column=3, padx=6, pady=4, sticky="w"
+        )
 
     @staticmethod
     def _to_bool(value: object) -> bool:
@@ -353,6 +379,22 @@ class RetirementApp:
             ],
         }
 
+    @staticmethod
+    def _account_type_from_settings(value: object) -> AccountType:
+        if isinstance(value, str):
+            if value in LABEL_TO_ACCOUNT_TYPE:
+                return LABEL_TO_ACCOUNT_TYPE[value]
+            return AccountType(value)
+        raise ValueError("Invalid account type in settings.")
+
+    @staticmethod
+    def _asset_class_from_settings(value: object) -> AssetClass:
+        if isinstance(value, str):
+            if value in LABEL_TO_ASSET_CLASS:
+                return LABEL_TO_ASSET_CLASS[value]
+            return AssetClass(value)
+        raise ValueError("Invalid asset class in settings.")
+
     def _apply_settings_snapshot(self, payload: dict[str, object]) -> None:
         people = payload.get("people", {})
         if not isinstance(people, dict):
@@ -406,8 +448,10 @@ class RetirementApp:
         for item in accounts_data:
             if not isinstance(item, dict):
                 continue
-            account_type = AccountType(str(item.get("account_type", AccountType.K401_NON_ROTH.value)))
-            asset_class = AssetClass(str(item.get("asset_class", AssetClass.STOCKS.value)))
+            account_type = self._account_type_from_settings(
+                item.get("account_type", AccountType.K401_NON_ROTH.value)
+            )
+            asset_class = self._asset_class_from_settings(item.get("asset_class", AssetClass.STOCKS.value))
             loaded_accounts.append(
                 Account(
                     owner=str(item.get("owner", "Primary")),
@@ -460,6 +504,36 @@ class RetirementApp:
         except Exception as exc:
             messagebox.showerror("Import failed", str(exc))
 
+    def export_income_tax_table_json(self) -> None:
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json")],
+            title="Export Income Tax Table",
+        )
+        if not path:
+            return
+
+        try:
+            save_tax_table_config(self.tax_table_config, Path(path))
+            messagebox.showinfo("Export complete", f"Income tax table exported to:\n{path}")
+        except Exception as exc:
+            messagebox.showerror("Export failed", str(exc))
+
+    def export_capital_gains_table_json(self) -> None:
+        path = filedialog.asksaveasfilename(
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json")],
+            title="Export Capital Gains Tax Table",
+        )
+        if not path:
+            return
+
+        try:
+            save_capital_gains_config(self.capital_gains_table_config, Path(path))
+            messagebox.showinfo("Export complete", f"Capital gains tax table exported to:\n{path}")
+        except Exception as exc:
+            messagebox.showerror("Export failed", str(exc))
+
     def _asset_class_default_rate(self, asset_class: AssetClass) -> float:
         if asset_class == AssetClass.STOCKS:
             return float(self.default_stock_return_var.get()) / 100.0
@@ -487,15 +561,21 @@ class RetirementApp:
         status_label = "Married Filing Jointly" if filing_status == CG_FILING_STATUS_MARRIED_JOINT else "Single"
         self.cap_gains_table_status_var.set(f"{status_label} | IRS {tax_year} | {source_url}")
 
-    def refresh_tax_tables(self) -> None:
+    def refresh_income_tax_table(self) -> None:
         try:
             self.tax_table_config = refresh_tax_table_config(CONFIG_PATH)
-            self.capital_gains_table_config = refresh_capital_gains_config(CG_CONFIG_PATH)
             self._update_tax_table_status()
-            self._update_capital_gains_table_status()
-            messagebox.showinfo("Tax tables refreshed", "IRS tax brackets were refreshed from the source sites.")
+            messagebox.showinfo("Income tax table refreshed", "IRS income tax table refreshed from source.")
         except Exception as exc:
-            messagebox.showerror("Tax table refresh failed", str(exc))
+            messagebox.showerror("Income tax refresh failed", str(exc))
+
+    def refresh_capital_gains_table(self) -> None:
+        try:
+            self.capital_gains_table_config = refresh_capital_gains_config(CG_CONFIG_PATH)
+            self._update_capital_gains_table_status()
+            messagebox.showinfo("Capital gains table refreshed", "IRS capital gains table refreshed from source.")
+        except Exception as exc:
+            messagebox.showerror("Capital gains refresh failed", str(exc))
 
     def add_account(self) -> None:
         try:
