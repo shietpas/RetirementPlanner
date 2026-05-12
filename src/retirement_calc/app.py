@@ -114,8 +114,31 @@ class RetirementApp:
         self.root.title("RetirementCalc")
         self.root.geometry("1180x760")
 
-        outer = ttk.Frame(self.root, padding=12)
-        outer.pack(fill=tk.BOTH, expand=True)
+        main_container = ttk.Frame(self.root)
+        main_container.pack(fill=tk.BOTH, expand=True)
+
+        canvas = tk.Canvas(main_container, highlightthickness=0)
+        vertical_scrollbar = ttk.Scrollbar(main_container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vertical_scrollbar.set)
+
+        vertical_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        outer = ttk.Frame(canvas, padding=12)
+        outer_window = canvas.create_window((0, 0), window=outer, anchor="nw")
+
+        def _update_scroll_region(_event: tk.Event | None = None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _sync_outer_width(event: tk.Event) -> None:
+            canvas.itemconfigure(outer_window, width=event.width)
+
+        def _on_mousewheel(event: tk.Event) -> None:
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        outer.bind("<Configure>", _update_scroll_region)
+        canvas.bind("<Configure>", _sync_outer_width)
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
         title = ttk.Label(outer, text="Retirement Withdrawal Planner", font=("Segoe UI", 16, "bold"))
         title.pack(anchor="w", pady=(0, 10))
