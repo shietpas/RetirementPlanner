@@ -21,12 +21,6 @@ class TaxTreatment(str, Enum):
     CAPITAL_GAINS = "capital_gains"
 
 
-class AssetClass(str, Enum):
-    STOCKS = "stocks"
-    BONDS = "bonds"
-    CASH = "cash"
-
-
 ACCOUNT_TAX_TREATMENT: dict[AccountType, TaxTreatment] = {
     AccountType.K401_NON_ROTH: TaxTreatment.ORDINARY_INCOME,
     AccountType.K401_ROTH: TaxTreatment.TAX_FREE,
@@ -55,28 +49,20 @@ ROTH_TYPES: set[AccountType] = {
     AccountType.IRA_ROTH,
 }
 
-ASSET_CLASS_DEFAULT_RETURNS: dict[AssetClass, float] = {
-    AssetClass.STOCKS: 0.08,
-    AssetClass.BONDS: 0.04,
-    AssetClass.CASH: 0.02,
-}
-
-
 @dataclass
 class Account:
     owner: str
     name: str
     account_type: AccountType
     balance: float
-    asset_class: AssetClass = AssetClass.STOCKS
-    annual_return_rate: float = 0.05
+    stock_mix: float = 0.60
     cost_basis: float = 0.0
 
     def __post_init__(self) -> None:
         if self.balance < 0:
             raise ValueError("balance must be >= 0")
-        if not -1.0 <= self.annual_return_rate <= 2.0:
-            raise ValueError("annual_return_rate must be between -1.0 and 2.0")
+        if not 0.0 <= self.stock_mix <= 1.0:
+            raise ValueError("stock_mix must be between 0.0 and 1.0")
         if self.account_type != AccountType.TAXABLE_INVESTMENT and self.cost_basis != 0:
             raise ValueError("cost_basis is only used for taxable investment accounts")
 

@@ -94,14 +94,14 @@ class CalculationTests(unittest.TestCase):
                 name="401k",
                 account_type=AccountType.K401_NON_ROTH,
                 balance=5000.0,
-                annual_return_rate=0.0,
+                stock_mix=1.0,
             ),
             Account(
                 owner="Primary",
                 name="401k Roth",
                 account_type=AccountType.K401_ROTH,
                 balance=10000.0,
-                annual_return_rate=0.0,
+                stock_mix=1.0,
             ),
         ]
         projection = simulate_retirement(
@@ -134,7 +134,7 @@ class CalculationTests(unittest.TestCase):
                 name="401k",
                 account_type=AccountType.K401_NON_ROTH,
                 balance=50000.0,
-                annual_return_rate=0.0,
+                stock_mix=1.0,
             )
         ]
         projection = simulate_retirement(
@@ -168,7 +168,7 @@ class CalculationTests(unittest.TestCase):
                     name="401k",
                     account_type=AccountType.K401_NON_ROTH,
                     balance=50000.0,
-                    annual_return_rate=0.0,
+                    stock_mix=1.0,
                 )
             ],
             years=1,
@@ -195,7 +195,7 @@ class CalculationTests(unittest.TestCase):
                     name="401k",
                     account_type=AccountType.K401_NON_ROTH,
                     balance=100000.0,
-                    annual_return_rate=0.10,
+                    stock_mix=1.0,
                 )
             ],
             years=1,
@@ -226,7 +226,7 @@ class CalculationTests(unittest.TestCase):
                     name="Brokerage",
                     account_type=AccountType.TAXABLE_INVESTMENT,
                     balance=100000.0,
-                    annual_return_rate=0.05,
+                    stock_mix=0.70,
                     cost_basis=80000.0,
                 )
             ],
@@ -265,7 +265,7 @@ class CalculationTests(unittest.TestCase):
                         name="401k",
                         account_type=AccountType.K401_NON_ROTH,
                         balance=100000.0,
-                        annual_return_rate=0.05,
+                        stock_mix=0.70,
                     )
                 ],
                 years=3,

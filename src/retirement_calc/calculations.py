@@ -16,6 +16,11 @@ from .tax_tables import calculate_progressive_tax
 from .capital_gains_tax_tables import calculate_capital_gains_tax
 
 
+# Long-run nominal approximations used as baseline market behavior.
+HISTORICAL_STOCK_RETURN_MEAN = 0.10
+HISTORICAL_BOND_RETURN_MEAN = 0.05
+
+
 @dataclass
 class TaxBreakdown:
     ordinary_income: float
@@ -149,18 +154,29 @@ def classify_withdrawals(withdrawals: list[tuple[Account, float]]) -> TaxBreakdo
 def apply_year_end_growth(accounts: list[Account]) -> list[Account]:
     grown_accounts: list[Account] = []
     for account in accounts:
+        blended_return = (account.stock_mix * HISTORICAL_STOCK_RETURN_MEAN) + (
+            (1.0 - account.stock_mix) * HISTORICAL_BOND_RETURN_MEAN
+        )
         grown_accounts.append(
             Account(
                 owner=account.owner,
                 name=account.name,
                 account_type=account.account_type,
-                balance=apply_annual_return(account.balance, account.annual_return_rate),
-                asset_class=account.asset_class,
-                annual_return_rate=account.annual_return_rate,
+                balance=apply_annual_return(account.balance, blended_return),
+                stock_mix=account.stock_mix,
                 cost_basis=account.cost_basis,
             )
         )
     return grown_accounts
+
+
+def market_asset_returns(scenario_return_bias: float, stock_shock: float) -> tuple[float, float]:
+    stock_return = clamp_annual_return_rate(HISTORICAL_STOCK_RETURN_MEAN + scenario_return_bias + stock_shock)
+    # Bonds tend to be partially counter-cyclical to stock shocks.
+    bond_return = clamp_annual_return_rate(
+        HISTORICAL_BOND_RETURN_MEAN + (scenario_return_bias * 0.35) - (stock_shock * 0.40)
+    )
+    return stock_return, bond_return
 
 
 def age_on_date(birth_date: date, as_of: date) -> int:
@@ -248,7 +264,8 @@ def simulate_retirement(
         if total_remaining_before <= 0:
             break
 
-        market_return_adjustment = rng.gauss(0.0, annual_return_volatility) if annual_return_volatility > 0 else 0.0
+        stock_shock = rng.gauss(0.0, annual_return_volatility) if annual_return_volatility > 0 else 0.0
+        stock_return, bond_return = market_asset_returns(scenario_return_bias, stock_shock)
 
         if withdrawal_mode == "distribute_years":
             years_left = years - year_index + 1
@@ -307,9 +324,7 @@ def simulate_retirement(
         pre_growth_balance_total = sum(account.balance for account in accounts)
         weighted_rate_numerator = 0.0
         for account in accounts:
-            effective_rate = clamp_annual_return_rate(
-                account.annual_return_rate + scenario_return_bias + market_return_adjustment
-            )
+            effective_rate = (account.stock_mix * stock_return) + ((1.0 - account.stock_mix) * bond_return)
             weighted_rate_numerator += account.balance * effective_rate
             account.balance = apply_annual_return(account.balance, effective_rate)
 
@@ -338,7 +353,7 @@ def simulate_retirement(
                 shortfall=shortfall,
                 annual_return_rate=annual_return_rate,
                 annual_gain_loss=annual_gain_loss,
-                market_return_adjustment=round(market_return_adjustment, 6),
+                market_return_adjustment=round(stock_shock, 6),
                 withdrawal_by_account_type=withdrawal_by_account_type,
                 withdrawal_sources=sources,
             )
@@ -379,8 +394,7 @@ def simulate_retirement_scenarios(
                 name=account.name,
                 account_type=account.account_type,
                 balance=account.balance,
-                asset_class=account.asset_class,
-                annual_return_rate=account.annual_return_rate,
+                stock_mix=account.stock_mix,
                 cost_basis=account.cost_basis,
             )
             for account in accounts

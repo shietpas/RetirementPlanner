@@ -17,7 +17,7 @@ from .capital_gains_tax_tables import (
     refresh_capital_gains_config,
     save_capital_gains_config,
 )
-from .models import ASSET_CLASS_DEFAULT_RETURNS, Account, AccountType, AssetClass
+from .models import Account, AccountType
 from .tax_tables import (
     FILING_STATUS_MARRIED_JOINT,
     FILING_STATUS_SINGLE,
@@ -49,12 +49,6 @@ ACCOUNT_TYPE_EXPORT_COLUMNS = [
     AccountType.IRA_ROTH,
     AccountType.TAXABLE_INVESTMENT,
 ]
-ASSET_CLASS_LABELS = {
-    AssetClass.STOCKS: "Stocks",
-    AssetClass.BONDS: "Bonds",
-    AssetClass.CASH: "Cash",
-}
-LABEL_TO_ASSET_CLASS = {label: asset_class for asset_class, label in ASSET_CLASS_LABELS.items()}
 SETTINGS_VERSION = 1
 
 
@@ -89,14 +83,9 @@ class RetirementApp:
         self.account_owner_var = tk.StringVar(value="Primary")
         self.account_name_var = tk.StringVar(value="")
         self.account_type_var = tk.StringVar(value=ACCOUNT_TYPE_LABELS[AccountType.K401_NON_ROTH])
-        self.account_asset_class_var = tk.StringVar(value=ASSET_CLASS_LABELS[AssetClass.STOCKS])
         self.account_balance_var = tk.StringVar(value="0")
-        self.account_return_var = tk.StringVar(value="5")
+        self.account_stock_mix_var = tk.StringVar(value="70")
         self.account_cost_basis_var = tk.StringVar(value="0")
-        self.use_default_returns_var = tk.BooleanVar(value=True)
-        self.default_stock_return_var = tk.StringVar(value=str(int(ASSET_CLASS_DEFAULT_RETURNS[AssetClass.STOCKS] * 100)))
-        self.default_bond_return_var = tk.StringVar(value=str(int(ASSET_CLASS_DEFAULT_RETURNS[AssetClass.BONDS] * 100)))
-        self.default_cash_return_var = tk.StringVar(value=str(int(ASSET_CLASS_DEFAULT_RETURNS[AssetClass.CASH] * 100)))
 
         self.withdrawal_mode_var = tk.StringVar(value="flat")
         self.withdrawal_value_var = tk.StringVar(value="60000")
@@ -224,55 +213,33 @@ class RetirementApp:
             width=26,
         ).grid(row=1, column=2, padx=6, pady=4)
 
-        ttk.Label(frame, text="Asset Class").grid(row=0, column=3, sticky="w", padx=6, pady=4)
-        ttk.Combobox(
-            frame,
-            textvariable=self.account_asset_class_var,
-            values=list(LABEL_TO_ASSET_CLASS.keys()),
-            state="readonly",
-            width=10,
-        ).grid(row=1, column=3, padx=6, pady=4)
+        ttk.Label(frame, text="Balance").grid(row=0, column=3, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.account_balance_var, width=12).grid(row=1, column=3, padx=6, pady=4)
 
-        ttk.Label(frame, text="Balance").grid(row=0, column=4, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.account_balance_var, width=12).grid(row=1, column=4, padx=6, pady=4)
+        ttk.Label(frame, text="Stock Mix % (rest bonds)").grid(row=0, column=4, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.account_stock_mix_var, width=14).grid(row=1, column=4, padx=6, pady=4)
 
-        ttk.Label(frame, text="Annual Return %").grid(row=0, column=5, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.account_return_var, width=10).grid(row=1, column=5, padx=6, pady=4)
+        ttk.Label(frame, text="Cost Basis (Taxable only)").grid(row=0, column=5, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.account_cost_basis_var, width=14).grid(row=1, column=5, padx=6, pady=4)
 
-        ttk.Label(frame, text="Cost Basis (Taxable only)").grid(row=0, column=6, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.account_cost_basis_var, width=14).grid(row=1, column=6, padx=6, pady=4)
-
-        ttk.Button(frame, text="Add Account", command=self.add_account).grid(row=1, column=7, padx=6, pady=4)
-        ttk.Button(frame, text="Update Selected", command=self.update_selected_account).grid(row=1, column=8, padx=6, pady=4)
-        ttk.Button(frame, text="Remove Selected", command=self.remove_selected_account).grid(row=1, column=9, padx=6, pady=4)
-
-        ttk.Checkbutton(
-            frame,
-            text="Use default return profile",
-            variable=self.use_default_returns_var,
-        ).grid(row=2, column=0, sticky="w", padx=6, pady=(4, 0))
-        ttk.Label(frame, text="Stocks %").grid(row=2, column=1, sticky="e", padx=4)
-        ttk.Entry(frame, textvariable=self.default_stock_return_var, width=6).grid(row=2, column=2, sticky="w")
-        ttk.Label(frame, text="Bonds %").grid(row=2, column=3, sticky="e", padx=4)
-        ttk.Entry(frame, textvariable=self.default_bond_return_var, width=6).grid(row=2, column=4, sticky="w")
-        ttk.Label(frame, text="Cash %").grid(row=2, column=5, sticky="e", padx=4)
-        ttk.Entry(frame, textvariable=self.default_cash_return_var, width=6).grid(row=2, column=6, sticky="w")
+        ttk.Button(frame, text="Add Account", command=self.add_account).grid(row=1, column=6, padx=6, pady=4)
+        ttk.Button(frame, text="Update Selected", command=self.update_selected_account).grid(row=1, column=7, padx=6, pady=4)
+        ttk.Button(frame, text="Remove Selected", command=self.remove_selected_account).grid(row=1, column=8, padx=6, pady=4)
 
         self.accounts_tree = ttk.Treeview(
             frame,
-            columns=("owner", "name", "type", "asset_class", "balance", "return", "cost_basis"),
+            columns=("owner", "name", "type", "balance", "stock_mix", "cost_basis"),
             show="headings",
             height=7,
         )
-        self.accounts_tree.grid(row=3, column=0, columnspan=10, sticky="ew", padx=6, pady=8)
+        self.accounts_tree.grid(row=2, column=0, columnspan=9, sticky="ew", padx=6, pady=8)
 
         for col, text, width in [
             ("owner", "Owner", 90),
             ("name", "Name", 160),
             ("type", "Type", 220),
-            ("asset_class", "Asset Class", 95),
             ("balance", "Balance", 110),
-            ("return", "Return %", 90),
+            ("stock_mix", "Stock Mix %", 95),
             ("cost_basis", "Cost Basis", 110),
         ]:
             self.accounts_tree.heading(col, text=text)
@@ -294,7 +261,7 @@ class RetirementApp:
         ttk.Label(frame, text="Projection Years").grid(row=0, column=2, sticky="w", padx=6, pady=4)
         ttk.Entry(frame, textvariable=self.projection_years_var, width=8).grid(row=1, column=2, padx=6, pady=4)
 
-        ttk.Label(frame, text="Annual Return Volatility %").grid(row=0, column=3, sticky="w", padx=6, pady=4)
+        ttk.Label(frame, text="Stock Shock Volatility %").grid(row=0, column=3, sticky="w", padx=6, pady=4)
         ttk.Entry(frame, textvariable=self.return_volatility_var, width=10).grid(row=1, column=3, padx=6, pady=4)
 
         ttk.Label(frame, text="Pessimistic Bias %").grid(row=0, column=4, sticky="w", padx=6, pady=4)
@@ -381,20 +348,13 @@ class RetirementApp:
                 "likely_bias_percent": self.likely_bias_var.get(),
                 "optimistic_bias_percent": self.optimistic_bias_var.get(),
             },
-            "return_profile": {
-                "use_default_returns": self.use_default_returns_var.get(),
-                "stocks_return_percent": self.default_stock_return_var.get(),
-                "bonds_return_percent": self.default_bond_return_var.get(),
-                "cash_return_percent": self.default_cash_return_var.get(),
-            },
             "accounts": [
                 {
                     "owner": account.owner,
                     "name": account.name,
                     "account_type": account.account_type.value,
-                    "asset_class": account.asset_class.value,
                     "balance": account.balance,
-                    "annual_return_rate": account.annual_return_rate,
+                    "stock_mix": account.stock_mix,
                     "cost_basis": account.cost_basis,
                 }
                 for account in self.accounts
@@ -409,14 +369,6 @@ class RetirementApp:
             return AccountType(value)
         raise ValueError("Invalid account type in settings.")
 
-    @staticmethod
-    def _asset_class_from_settings(value: object) -> AssetClass:
-        if isinstance(value, str):
-            if value in LABEL_TO_ASSET_CLASS:
-                return LABEL_TO_ASSET_CLASS[value]
-            return AssetClass(value)
-        raise ValueError("Invalid asset class in settings.")
-
     def _apply_settings_snapshot(self, payload: dict[str, object]) -> None:
         people = payload.get("people", {})
         if not isinstance(people, dict):
@@ -425,13 +377,12 @@ class RetirementApp:
         spouse = people.get("spouse", {})
         plan = payload.get("plan", {})
         scenario_returns = payload.get("scenario_returns", {})
-        return_profile = payload.get("return_profile", {})
         accounts_data = payload.get("accounts", [])
 
         if not isinstance(primary, dict) or not isinstance(spouse, dict):
             raise ValueError("Invalid settings: person details are invalid.")
-        if not isinstance(plan, dict) or not isinstance(return_profile, dict):
-            raise ValueError("Invalid settings: plan or return profile is invalid.")
+        if not isinstance(plan, dict):
+            raise ValueError("Invalid settings: plan section is invalid.")
         if not isinstance(scenario_returns, dict):
             raise ValueError("Invalid settings: scenario return settings are invalid.")
         if not isinstance(accounts_data, list):
@@ -466,19 +417,6 @@ class RetirementApp:
             str(scenario_returns.get("optimistic_bias_percent", self.optimistic_bias_var.get()))
         )
 
-        self.use_default_returns_var.set(
-            self._to_bool(return_profile.get("use_default_returns", self.use_default_returns_var.get()))
-        )
-        self.default_stock_return_var.set(
-            str(return_profile.get("stocks_return_percent", self.default_stock_return_var.get()))
-        )
-        self.default_bond_return_var.set(
-            str(return_profile.get("bonds_return_percent", self.default_bond_return_var.get()))
-        )
-        self.default_cash_return_var.set(
-            str(return_profile.get("cash_return_percent", self.default_cash_return_var.get()))
-        )
-
         loaded_accounts: list[Account] = []
         for item in accounts_data:
             if not isinstance(item, dict):
@@ -486,15 +424,27 @@ class RetirementApp:
             account_type = self._account_type_from_settings(
                 item.get("account_type", AccountType.K401_NON_ROTH.value)
             )
-            asset_class = self._asset_class_from_settings(item.get("asset_class", AssetClass.STOCKS.value))
+            stock_mix_value = item.get("stock_mix")
+            if stock_mix_value is None:
+                # Backward compatibility for legacy settings files.
+                legacy_asset = str(item.get("asset_class", "stocks")).strip().lower()
+                if legacy_asset == "bonds":
+                    stock_mix = 0.0
+                elif legacy_asset == "cash":
+                    stock_mix = 0.0
+                else:
+                    stock_mix = 1.0
+            else:
+                stock_mix = float(stock_mix_value)
+                if stock_mix > 1.0:
+                    stock_mix /= 100.0
             loaded_accounts.append(
                 Account(
                     owner=str(item.get("owner", "Primary")),
                     name=str(item.get("name", ACCOUNT_TYPE_LABELS[account_type])),
                     account_type=account_type,
                     balance=float(item.get("balance", 0.0)),
-                    asset_class=asset_class,
-                    annual_return_rate=float(item.get("annual_return_rate", 0.05)),
+                    stock_mix=stock_mix,
                     cost_basis=float(item.get("cost_basis", 0.0)),
                 )
             )
@@ -569,13 +519,6 @@ class RetirementApp:
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc))
 
-    def _asset_class_default_rate(self, asset_class: AssetClass) -> float:
-        if asset_class == AssetClass.STOCKS:
-            return float(self.default_stock_return_var.get()) / 100.0
-        if asset_class == AssetClass.BONDS:
-            return float(self.default_bond_return_var.get()) / 100.0
-        return float(self.default_cash_return_var.get()) / 100.0
-
     def _filing_status(self) -> str:
         return FILING_STATUS_MARRIED_JOINT if self.include_spouse_var.get() else FILING_STATUS_SINGLE
 
@@ -616,12 +559,8 @@ class RetirementApp:
         try:
             account_label = self.account_type_var.get()
             account_type = LABEL_TO_ACCOUNT_TYPE[account_label]
-            asset_class = LABEL_TO_ASSET_CLASS[self.account_asset_class_var.get()]
             balance = float(self.account_balance_var.get())
-            if self.use_default_returns_var.get():
-                annual_return_rate = self._asset_class_default_rate(asset_class)
-            else:
-                annual_return_rate = float(self.account_return_var.get()) / 100.0
+            stock_mix = float(self.account_stock_mix_var.get()) / 100.0
             cost_basis = float(self.account_cost_basis_var.get())
 
             if account_type != AccountType.TAXABLE_INVESTMENT:
@@ -632,8 +571,7 @@ class RetirementApp:
                 name=self.account_name_var.get().strip() or account_label,
                 account_type=account_type,
                 balance=balance,
-                asset_class=asset_class,
-                annual_return_rate=annual_return_rate,
+                stock_mix=stock_mix,
                 cost_basis=cost_basis,
             )
             self.accounts.append(account)
@@ -662,9 +600,8 @@ class RetirementApp:
         self.account_owner_var.set(account.owner)
         self.account_name_var.set(account.name)
         self.account_type_var.set(ACCOUNT_TYPE_LABELS[account.account_type])
-        self.account_asset_class_var.set(ASSET_CLASS_LABELS[account.asset_class])
         self.account_balance_var.set(f"{account.balance:.2f}")
-        self.account_return_var.set(f"{account.annual_return_rate * 100:.2f}")
+        self.account_stock_mix_var.set(f"{account.stock_mix * 100:.2f}")
         self.account_cost_basis_var.set(f"{account.cost_basis:.2f}")
 
     def update_selected_account(self) -> None:
@@ -681,12 +618,8 @@ class RetirementApp:
         try:
             account_label = self.account_type_var.get()
             account_type = LABEL_TO_ACCOUNT_TYPE[account_label]
-            asset_class = LABEL_TO_ASSET_CLASS[self.account_asset_class_var.get()]
             balance = float(self.account_balance_var.get())
-            if self.use_default_returns_var.get():
-                annual_return_rate = self._asset_class_default_rate(asset_class)
-            else:
-                annual_return_rate = float(self.account_return_var.get()) / 100.0
+            stock_mix = float(self.account_stock_mix_var.get()) / 100.0
             cost_basis = float(self.account_cost_basis_var.get())
 
             if account_type != AccountType.TAXABLE_INVESTMENT:
@@ -697,8 +630,7 @@ class RetirementApp:
                 name=self.account_name_var.get().strip() or account_label,
                 account_type=account_type,
                 balance=balance,
-                asset_class=asset_class,
-                annual_return_rate=annual_return_rate,
+                stock_mix=stock_mix,
                 cost_basis=cost_basis,
             )
             self._refresh_accounts_tree()
@@ -720,9 +652,8 @@ class RetirementApp:
                     account.owner,
                     account.name,
                     ACCOUNT_TYPE_LABELS[account.account_type],
-                    ASSET_CLASS_LABELS[account.asset_class],
                     f"{account.balance:,.2f}",
-                    f"{account.annual_return_rate * 100:.2f}",
+                    f"{account.stock_mix * 100:.2f}",
                     f"{account.cost_basis:,.2f}",
                 ),
             )
