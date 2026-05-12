@@ -837,10 +837,10 @@ class RetirementApp:
         self.results_text.insert(
             tk.END,
             "Year | Calendar Year | User Age | Spouse Age | Withdrawn | Salary | SS Income | Pension | Ordinary | "
-            "Taxable SS | Cap Gains | Taxes | Net Income | End Balance | Shortfall | Return % | Gain/Loss | Market Adj % | "
+            "Taxable SS | Cap Gains | Taxes | Net Income | Begin Balance | End Balance | Shortfall | Return % | Gain/Loss | Market Adj % | "
             f"{account_type_headers}\n",
         )
-        self.results_text.insert(tk.END, "-" * 320 + "\n")
+        self.results_text.insert(tk.END, "-" * 340 + "\n")
 
         total_taxes = 0.0
         for item in projection:
@@ -866,6 +866,7 @@ class RetirementApp:
                 f"{item.capital_gains:>9,.2f} | "
                 f"{item.taxes:>7,.2f} | "
                 f"{item.net_income:>10,.2f} | "
+                f"{item.beginning_balance:>13,.2f} | "
                 f"{item.ending_balance:>11,.2f} | "
                 f"{item.shortfall:>8,.2f} | "
                 f"{item.annual_return_rate * 100:>8,.2f} | "
@@ -885,6 +886,11 @@ class RetirementApp:
         self.results_text.insert(tk.END, "\n")
         self.results_text.insert(tk.END, f"Total Taxes: {total_taxes:,.2f}\n")
         self.results_text.insert(tk.END, f"Final Balance: {projection[-1].ending_balance:,.2f}\n")
+        
+        # Display tax bracket rates if available
+        if projection and projection[0].tax_bracket_rates:
+            tax_rates_str = ", ".join([f"{rate * 100:.0f}%" for rate in projection[0].tax_bracket_rates])
+            self.results_text.insert(tk.END, f"Tax Rates (marginal): {tax_rates_str}\n")
 
     def export_projection_csv(self) -> None:
         if not self.last_projection_by_scenario:
@@ -918,11 +924,13 @@ class RetirementApp:
                         "capital_gains",
                         "taxes",
                         "net_income",
+                        "beginning_balance",
                         "ending_balance",
                         "shortfall",
                         "annual_return_rate",
                         "annual_gain_loss",
                         "market_return_adjustment",
+                        "tax_bracket_rates",
                         *[account_type.value for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS],
                         "withdrawal_sources",
                     ]
@@ -937,6 +945,11 @@ class RetirementApp:
                                 )
                                 for source in year.withdrawal_sources
                             ]
+                        )
+                        tax_rates_str = (
+                            "; ".join([f"{rate * 100:.0f}%" for rate in year.tax_bracket_rates])
+                            if year.tax_bracket_rates
+                            else ""
                         )
                         writer.writerow(
                             [
@@ -954,11 +967,13 @@ class RetirementApp:
                                 f"{year.capital_gains:.2f}",
                                 f"{year.taxes:.2f}",
                                 f"{year.net_income:.2f}",
+                                f"{year.beginning_balance:.2f}",
                                 f"{year.ending_balance:.2f}",
                                 f"{year.shortfall:.2f}",
                                 f"{year.annual_return_rate:.6f}",
                                 f"{year.annual_gain_loss:.2f}",
                                 f"{year.market_return_adjustment:.6f}",
+                                tax_rates_str,
                                 *[
                                     f"{year.withdrawal_by_account_type.get(account_type.value, 0.0):.2f}"
                                     for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS

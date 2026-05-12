@@ -52,11 +52,13 @@ class YearProjection:
     capital_gains: float
     taxes: float
     net_income: float
+    beginning_balance: float
     ending_balance: float
     shortfall: float
     annual_return_rate: float = 0.0
     annual_gain_loss: float = 0.0
     market_return_adjustment: float = 0.0
+    tax_bracket_rates: list[float] | None = None
     withdrawal_by_account_type: dict[str, float] = field(default_factory=dict)
     withdrawal_sources: list[WithdrawalSource] = field(default_factory=list)
 
@@ -278,15 +280,39 @@ def simulate_retirement(
 
         owner_ages = {owner: age + (year_index - 1) for owner, age in owner_age_by_name.items()}
         retired_owners: set[str] = set()
-        salary_income = 0.0
+        
+        # Calculate salary and pension per owner with mid-year transition handling
+        # Rule: Salary stops at retirement_age. Pension cannot start before retirement_age.
+        # If retirement_age == pension_start_age, assume mid-year transition (half salary, half pension).
+        # Otherwise, there may be a gap between retirement and collecting benefits.
+        salary_income_by_owner = {}
+        pension_income_by_owner = {}
+        
         for owner, owner_age in owner_ages.items():
             retirement_age = owner_retirement_age_by_name.get(owner, 65)
-            if owner_age > retirement_age:
+            pension_start_age, pension_monthly = pension_config.get(owner, (None, 0.0))
+            
+            if owner_age < retirement_age:
+                # Not yet retired: full salary
+                salary_income_by_owner[owner] = owner_salary_by_name.get(owner, 0.0)
+            elif owner_age == retirement_age:
+                if pension_start_age == retirement_age:
+                    # Mid-year transition: half salary (first 6 months) + half pension (last 6 months)
+                    salary_income_by_owner[owner] = owner_salary_by_name.get(owner, 0.0) * 0.5
+                    pension_income_by_owner[owner] = pension_monthly * 12.0 * 0.5
+                else:
+                    # Retirement year but pension starts later: salary stops
+                    salary_income_by_owner[owner] = 0.0
                 retired_owners.add(owner)
-            else:
-                salary_income += owner_salary_by_name.get(owner, 0.0)
+            else:  # owner_age > retirement_age
+                # Past retirement: salary stopped, check if pension has started
+                retired_owners.add(owner)
+                if pension_start_age is not None and owner_age >= pension_start_age:
+                    pension_income_by_owner[owner] = pension_monthly * 12.0
+                # Otherwise: gap with no income from this source
 
-        needed_withdrawal = max(0.0, round(target_withdrawal - salary_income, 2))
+        pension_income = sum(pension_income_by_owner.values())
+        salary_income = sum(salary_income_by_owner.values())
 
         social_security_income = 0.0
         for owner, (start_age, monthly_amount) in owner_ss_by_name.items():
@@ -294,16 +320,18 @@ def simulate_retirement(
             if start_age is not None and owner_age >= start_age:
                 social_security_income += monthly_amount * 12.0
 
-        pension_income = 0.0
-        for owner, (start_age, monthly_amount) in pension_config.items():
-            owner_age = owner_ages.get(owner, 0)
-            if start_age is not None and owner_age >= start_age:
-                pension_income += monthly_amount * 12.0
+        # Calculate beginning balance before withdrawals
+        beginning_balance = round(sum(account.balance for account in accounts), 2)
+
+        # All household income (salary, SS, pension) reduces withdrawal need
+        total_household_income = salary_income + social_security_income + pension_income
+        needed_withdrawal = max(0.0, round(target_withdrawal - total_household_income, 2))
 
         withdrawals, shortfall = optimize_withdrawals(accounts, owner_ages, retired_owners, needed_withdrawal)
         breakdown = classify_withdrawals(withdrawals)
         sources: list[WithdrawalSource] = []
         withdrawal_by_account_type = {key: 0.0 for key in account_type_keys}
+        
         for account, amount in withdrawals:
             withdrawal_by_account_type[account.account_type.value] = round(
                 withdrawal_by_account_type[account.account_type.value] + amount,
@@ -332,6 +360,15 @@ def simulate_retirement(
         taxes = round(ordinary_income_tax + capital_gains_tax, 2)
         withdrawn_total = round(sum(amount for _, amount in withdrawals), 2)
         net_income = round(withdrawn_total + salary_income + social_security_income + pension_income - taxes, 2)
+
+        # Extract marginal tax rates from brackets for display
+        tax_bracket_rates: list[float] | None = None
+        if tax_brackets:
+            tax_bracket_rates = []
+            for bracket in tax_brackets:
+                rate = bracket.get('rate')
+                if rate is not None:
+                    tax_bracket_rates.append(rate)
 
         pre_growth_balance_total = sum(account.balance for account in accounts)
         weighted_rate_numerator = 0.0
@@ -362,11 +399,13 @@ def simulate_retirement(
                 capital_gains=round(breakdown.capital_gains, 2),
                 taxes=taxes,
                 net_income=net_income,
+                beginning_balance=beginning_balance,
                 ending_balance=ending_balance,
                 shortfall=shortfall,
                 annual_return_rate=annual_return_rate,
                 annual_gain_loss=annual_gain_loss,
                 market_return_adjustment=round(stock_shock, 6),
+                tax_bracket_rates=tax_bracket_rates,
                 withdrawal_by_account_type=withdrawal_by_account_type,
                 withdrawal_sources=sources,
             )
