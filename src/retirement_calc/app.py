@@ -288,63 +288,85 @@ class RetirementApp:
         self.accounts_tree.bind("<<TreeviewSelect>>", self.on_account_selected)
 
     def _build_plan_section(self, frame: ttk.LabelFrame) -> None:
-        ttk.Radiobutton(frame, text="Flat annual withdrawal", variable=self.withdrawal_mode_var, value="flat").grid(
+        plan_canvas = tk.Canvas(frame, highlightthickness=0, height=190)
+        plan_scrollbar = ttk.Scrollbar(frame, orient="horizontal", command=plan_canvas.xview)
+        plan_canvas.configure(xscrollcommand=plan_scrollbar.set)
+        plan_canvas.grid(row=0, column=0, sticky="ew")
+        plan_scrollbar.grid(row=1, column=0, sticky="ew")
+        frame.grid_columnconfigure(0, weight=1)
+
+        plan_content = ttk.Frame(plan_canvas)
+        plan_window = plan_canvas.create_window((0, 0), window=plan_content, anchor="nw")
+
+        def _sync_plan_scrollregion(_event: tk.Event | None = None) -> None:
+            plan_canvas.configure(scrollregion=plan_canvas.bbox("all"))
+
+        def _sync_plan_width(event: tk.Event) -> None:
+            plan_canvas.itemconfigure(plan_window, height=max(event.height, plan_content.winfo_reqheight()))
+
+        plan_content.bind("<Configure>", _sync_plan_scrollregion)
+        plan_canvas.bind("<Configure>", _sync_plan_width)
+
+        ttk.Radiobutton(plan_content, text="Flat annual withdrawal", variable=self.withdrawal_mode_var, value="flat").grid(
             row=0, column=0, sticky="w", padx=6, pady=4
         )
-        ttk.Radiobutton(frame, text="Distribute across projection years", variable=self.withdrawal_mode_var, value="distribute_years").grid(
-            row=1, column=0, sticky="w", padx=6, pady=4
-        )
+        ttk.Radiobutton(
+            plan_content,
+            text="Distribute across projection years",
+            variable=self.withdrawal_mode_var,
+            value="distribute_years",
+        ).grid(row=1, column=0, sticky="w", padx=6, pady=4)
 
-        ttk.Label(frame, text="Household Spending Target (annual)").grid(row=0, column=1, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.withdrawal_value_var, width=14).grid(row=1, column=1, padx=6, pady=4)
+        ttk.Label(plan_content, text="Household Spending Target (annual)").grid(row=0, column=1, sticky="w", padx=6, pady=4)
+        ttk.Entry(plan_content, textvariable=self.withdrawal_value_var, width=14).grid(row=1, column=1, padx=6, pady=4)
 
-        ttk.Label(frame, text="Inflation Rate % (annual)").grid(row=0, column=2, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.inflation_rate_var, width=8).grid(row=1, column=2, padx=6, pady=4)
+        ttk.Label(plan_content, text="Inflation Rate % (annual)").grid(row=0, column=2, sticky="w", padx=6, pady=4)
+        ttk.Entry(plan_content, textvariable=self.inflation_rate_var, width=8).grid(row=1, column=2, padx=6, pady=4)
 
-        ttk.Label(frame, text="Projection Years").grid(row=0, column=3, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.projection_years_var, width=8).grid(row=1, column=3, padx=6, pady=4)
+        ttk.Label(plan_content, text="Projection Years").grid(row=0, column=3, sticky="w", padx=6, pady=4)
+        ttk.Entry(plan_content, textvariable=self.projection_years_var, width=8).grid(row=1, column=3, padx=6, pady=4)
 
-        ttk.Label(frame, text="Stock Shock Volatility %").grid(row=0, column=4, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.return_volatility_var, width=10).grid(row=1, column=4, padx=6, pady=4)
+        ttk.Label(plan_content, text="Stock Shock Volatility %").grid(row=0, column=4, sticky="w", padx=6, pady=4)
+        ttk.Entry(plan_content, textvariable=self.return_volatility_var, width=10).grid(row=1, column=4, padx=6, pady=4)
 
-        ttk.Label(frame, text="Pessimistic Return Delta %").grid(row=0, column=5, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.pessimistic_bias_var, width=10).grid(row=1, column=5, padx=6, pady=4)
+        ttk.Label(plan_content, text="Pessimistic Return Delta %").grid(row=0, column=5, sticky="w", padx=6, pady=4)
+        ttk.Entry(plan_content, textvariable=self.pessimistic_bias_var, width=10).grid(row=1, column=5, padx=6, pady=4)
 
-        ttk.Label(frame, text="Likely Return Delta %").grid(row=0, column=6, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.likely_bias_var, width=10).grid(row=1, column=6, padx=6, pady=4)
+        ttk.Label(plan_content, text="Likely Return Delta %").grid(row=0, column=6, sticky="w", padx=6, pady=4)
+        ttk.Entry(plan_content, textvariable=self.likely_bias_var, width=10).grid(row=1, column=6, padx=6, pady=4)
 
-        ttk.Label(frame, text="Optimistic Return Delta %").grid(row=0, column=7, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.optimistic_bias_var, width=10).grid(row=1, column=7, padx=6, pady=4)
+        ttk.Label(plan_content, text="Optimistic Return Delta %").grid(row=0, column=7, sticky="w", padx=6, pady=4)
+        ttk.Entry(plan_content, textvariable=self.optimistic_bias_var, width=10).grid(row=1, column=7, padx=6, pady=4)
 
-        ttk.Label(frame, text="Tax").grid(row=2, column=0, sticky="w", padx=6, pady=4)
-        ttk.Label(frame, textvariable=self.tax_table_status_var).grid(row=2, column=1, columnspan=3, sticky="w", padx=6, pady=4)
+        ttk.Label(plan_content, text="Tax").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        ttk.Label(plan_content, textvariable=self.tax_table_status_var).grid(row=2, column=1, columnspan=3, sticky="w", padx=6, pady=4)
 
-        ttk.Label(frame, text="Cap Gains").grid(row=2, column=4, sticky="w", padx=6, pady=4)
-        ttk.Label(frame, textvariable=self.cap_gains_table_status_var).grid(row=2, column=5, columnspan=2, sticky="w", padx=6, pady=4)
+        ttk.Label(plan_content, text="Cap Gains").grid(row=2, column=4, sticky="w", padx=6, pady=4)
+        ttk.Label(plan_content, textvariable=self.cap_gains_table_status_var).grid(row=2, column=5, columnspan=2, sticky="w", padx=6, pady=4)
 
-        ttk.Button(frame, text="Calculate Plan", command=self.calculate_plan).grid(row=3, column=0, padx=10, pady=4, sticky="w")
+        ttk.Button(plan_content, text="Calculate Plan", command=self.calculate_plan).grid(row=3, column=0, padx=10, pady=4, sticky="w")
 
-        ttk.Label(frame, text="Settings").grid(row=4, column=0, sticky="w", padx=6, pady=(8, 4))
-        ttk.Button(frame, text="Import Settings", command=self.import_settings_json).grid(
+        ttk.Label(plan_content, text="Settings").grid(row=4, column=0, sticky="w", padx=6, pady=(8, 4))
+        ttk.Button(plan_content, text="Import Settings", command=self.import_settings_json).grid(
             row=4, column=1, padx=6, pady=4, sticky="w"
         )
-        ttk.Button(frame, text="Export Settings", command=self.export_settings_json).grid(
+        ttk.Button(plan_content, text="Export Settings", command=self.export_settings_json).grid(
             row=4, column=2, padx=6, pady=4, sticky="w"
         )
-        ttk.Button(frame, text="Export CSV", command=self.export_projection_csv).grid(
+        ttk.Button(plan_content, text="Export CSV", command=self.export_projection_csv).grid(
             row=4, column=3, padx=6, pady=4, sticky="w"
         )
 
-        ttk.Button(frame, text="Export Income Tax Table", command=self.export_income_tax_table_json).grid(
+        ttk.Button(plan_content, text="Export Income Tax Table", command=self.export_income_tax_table_json).grid(
             row=5, column=0, padx=6, pady=4, sticky="w"
         )
-        ttk.Button(frame, text="Refresh Income Tax Table", command=self.refresh_income_tax_table).grid(
+        ttk.Button(plan_content, text="Refresh Income Tax Table", command=self.refresh_income_tax_table).grid(
             row=5, column=1, padx=6, pady=4, sticky="w"
         )
-        ttk.Button(frame, text="Export Capital Gains Table", command=self.export_capital_gains_table_json).grid(
+        ttk.Button(plan_content, text="Export Capital Gains Table", command=self.export_capital_gains_table_json).grid(
             row=5, column=2, padx=6, pady=4, sticky="w"
         )
-        ttk.Button(frame, text="Refresh Capital Gains Table", command=self.refresh_capital_gains_table).grid(
+        ttk.Button(plan_content, text="Refresh Capital Gains Table", command=self.refresh_capital_gains_table).grid(
             row=5, column=3, padx=6, pady=4, sticky="w"
         )
 
