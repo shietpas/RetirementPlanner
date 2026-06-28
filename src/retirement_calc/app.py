@@ -95,6 +95,7 @@ class RetirementApp:
 
         self.withdrawal_mode_var = tk.StringVar(value="flat")
         self.withdrawal_value_var = tk.StringVar(value="60000")
+        self.inflation_rate_var = tk.StringVar(value="2.5")
         self.projection_years_var = tk.StringVar(value="30")
         self.return_volatility_var = tk.StringVar(value="12")
         self.pessimistic_bias_var = tk.StringVar(value="-3")
@@ -297,20 +298,23 @@ class RetirementApp:
         ttk.Label(frame, text="Household Spending Target (annual)").grid(row=0, column=1, sticky="w", padx=6, pady=4)
         ttk.Entry(frame, textvariable=self.withdrawal_value_var, width=14).grid(row=1, column=1, padx=6, pady=4)
 
-        ttk.Label(frame, text="Projection Years").grid(row=0, column=2, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.projection_years_var, width=8).grid(row=1, column=2, padx=6, pady=4)
+        ttk.Label(frame, text="Inflation Rate % (annual)").grid(row=0, column=2, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.inflation_rate_var, width=8).grid(row=1, column=2, padx=6, pady=4)
 
-        ttk.Label(frame, text="Stock Shock Volatility %").grid(row=0, column=3, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.return_volatility_var, width=10).grid(row=1, column=3, padx=6, pady=4)
+        ttk.Label(frame, text="Projection Years").grid(row=0, column=3, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.projection_years_var, width=8).grid(row=1, column=3, padx=6, pady=4)
 
-        ttk.Label(frame, text="Pessimistic Bias %").grid(row=0, column=4, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.pessimistic_bias_var, width=10).grid(row=1, column=4, padx=6, pady=4)
+        ttk.Label(frame, text="Stock Shock Volatility %").grid(row=0, column=4, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.return_volatility_var, width=10).grid(row=1, column=4, padx=6, pady=4)
 
-        ttk.Label(frame, text="Likely Bias %").grid(row=0, column=5, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.likely_bias_var, width=10).grid(row=1, column=5, padx=6, pady=4)
+        ttk.Label(frame, text="Pessimistic Return Delta %").grid(row=0, column=5, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.pessimistic_bias_var, width=10).grid(row=1, column=5, padx=6, pady=4)
 
-        ttk.Label(frame, text="Optimistic Bias %").grid(row=0, column=6, sticky="w", padx=6, pady=4)
-        ttk.Entry(frame, textvariable=self.optimistic_bias_var, width=10).grid(row=1, column=6, padx=6, pady=4)
+        ttk.Label(frame, text="Likely Return Delta %").grid(row=0, column=6, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.likely_bias_var, width=10).grid(row=1, column=6, padx=6, pady=4)
+
+        ttk.Label(frame, text="Optimistic Return Delta %").grid(row=0, column=7, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.optimistic_bias_var, width=10).grid(row=1, column=7, padx=6, pady=4)
 
         ttk.Label(frame, text="Tax").grid(row=2, column=0, sticky="w", padx=6, pady=4)
         ttk.Label(frame, textvariable=self.tax_table_status_var).grid(row=2, column=1, columnspan=3, sticky="w", padx=6, pady=4)
@@ -385,6 +389,7 @@ class RetirementApp:
             "plan": {
                 "withdrawal_mode": self.withdrawal_mode_var.get(),
                 "withdrawal_value": self.withdrawal_value_var.get(),
+                "inflation_rate_percent": self.inflation_rate_var.get(),
                 "projection_years": self.projection_years_var.get(),
             },
             "scenario_returns": {
@@ -457,6 +462,7 @@ class RetirementApp:
 
         self.withdrawal_mode_var.set(str(plan.get("withdrawal_mode", self.withdrawal_mode_var.get())))
         self.withdrawal_value_var.set(str(plan.get("withdrawal_value", self.withdrawal_value_var.get())))
+        self.inflation_rate_var.set(str(plan.get("inflation_rate_percent", self.inflation_rate_var.get())))
         self.projection_years_var.set(str(plan.get("projection_years", self.projection_years_var.get())))
         self.return_volatility_var.set(
             str(scenario_returns.get("annual_volatility_percent", self.return_volatility_var.get()))
@@ -758,6 +764,7 @@ class RetirementApp:
 
             years = int(self.projection_years_var.get())
             withdrawal_value = float(self.withdrawal_value_var.get())
+            inflation_rate = float(self.inflation_rate_var.get()) / 100.0
             annual_return_volatility = float(self.return_volatility_var.get()) / 100.0
             pessimistic_bias = float(self.pessimistic_bias_var.get()) / 100.0
             likely_bias = float(self.likely_bias_var.get()) / 100.0
@@ -786,6 +793,7 @@ class RetirementApp:
                 tax_brackets=tax_brackets,
                 capital_gains_brackets=capital_gains_brackets,
                 annual_return_volatility=annual_return_volatility,
+                inflation_rate=inflation_rate,
                 pessimistic_return_bias=pessimistic_bias,
                 likely_return_bias=likely_bias,
                 optimistic_return_bias=optimistic_bias,
@@ -803,20 +811,24 @@ class RetirementApp:
 
         self.results_text.insert(
             tk.END,
-            "Scenario Summary | Final Balance | Total Taxes | First Year Shortfall\n",
+            "Scenario Summary | Final Balance | Avg Return % | Total Taxes | First Year Shortfall\n",
         )
-        self.results_text.insert(tk.END, "-" * 90 + "\n")
+        self.results_text.insert(tk.END, "-" * 108 + "\n")
 
         for scenario_name, projection in projection_by_scenario.items():
             if not projection:
-                self.results_text.insert(tk.END, f"{scenario_name:<16} | {'N/A':>13} | {'N/A':>11} | {'N/A':>20}\n")
+                self.results_text.insert(
+                    tk.END,
+                    f"{scenario_name:<16} | {'N/A':>13} | {'N/A':>11} | {'N/A':>11} | {'N/A':>20}\n",
+                )
                 continue
             total_taxes = sum(item.taxes for item in projection)
+            average_return_rate = sum(item.annual_return_rate for item in projection) / len(projection)
             shortfall_year = next((item.calendar_year for item in projection if item.shortfall > 0), None)
             shortfall_label = "None" if shortfall_year is None else str(shortfall_year)
             self.results_text.insert(
                 tk.END,
-                f"{scenario_name:<16} | {projection[-1].ending_balance:>13,.2f} | {total_taxes:>11,.2f} | {shortfall_label:>20}\n",
+                f"{scenario_name:<16} | {projection[-1].ending_balance:>13,.2f} | {average_return_rate * 100:>11,.2f} | {total_taxes:>11,.2f} | {shortfall_label:>20}\n",
             )
 
         self.results_text.insert(tk.END, "\n")

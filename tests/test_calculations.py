@@ -228,6 +228,39 @@ class CalculationTests(unittest.TestCase):
         # Ending balance should reflect returns only, not salary contributions.
         self.assertEqual(projection[0].ending_balance, 110000.0)
 
+    def test_inflation_escalates_target_spending_each_year(self):
+        projection = simulate_retirement(
+            accounts=[
+                Account(
+                    owner="Primary",
+                    name="Brokerage",
+                    account_type=AccountType.TAXABLE_INVESTMENT,
+                    balance=50000.0,
+                    stock_mix=0.0,
+                    cost_basis=40000.0,
+                )
+            ],
+            years=2,
+            annual_withdrawal_value=15000.0,
+            withdrawal_mode="flat",
+            owner_age_by_name={"Primary": 70},
+            owner_retirement_age_by_name={"Primary": 60},
+            owner_salary_by_name={"Primary": 0.0},
+            owner_ss_by_name={"Primary": (67, 0.0)},
+            owner_pension_by_name=None,
+            tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
+            capital_gains_brackets=capital_gains_brackets_for_status(
+                default_capital_gains_config(),
+                FILING_STATUS_SINGLE,
+            ),
+            annual_return_volatility=0.0,
+            inflation_rate=0.025,
+            random_seed=99,
+        )
+
+        self.assertEqual(projection[0].desired_net_spending, 15000.0)
+        self.assertEqual(projection[1].desired_net_spending, 15375.0)
+
     def test_scenarios_order_final_balances(self):
         projections = simulate_retirement_scenarios(
             accounts=[
@@ -266,6 +299,42 @@ class CalculationTests(unittest.TestCase):
 
         self.assertLess(pess_end, likely_end)
         self.assertLess(likely_end, opt_end)
+
+    def test_likely_scenario_tracks_sp500_reference_return(self):
+        projections = simulate_retirement_scenarios(
+            accounts=[
+                Account(
+                    owner="Primary",
+                    name="Brokerage",
+                    account_type=AccountType.TAXABLE_INVESTMENT,
+                    balance=100000.0,
+                    stock_mix=1.0,
+                    cost_basis=80000.0,
+                )
+            ],
+            years=1,
+            annual_withdrawal_value=0.0,
+            withdrawal_mode="flat",
+            owner_age_by_name={"Primary": 40},
+            owner_retirement_age_by_name={"Primary": 30},
+            owner_salary_by_name={"Primary": 0.0},
+            owner_ss_by_name={"Primary": (67, 0.0)},
+            owner_pension_by_name=None,
+            tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
+            capital_gains_brackets=capital_gains_brackets_for_status(
+                default_capital_gains_config(),
+                FILING_STATUS_SINGLE,
+            ),
+            annual_return_volatility=0.0,
+            pessimistic_return_bias=-0.03,
+            likely_return_bias=0.0,
+            optimistic_return_bias=0.03,
+            random_seed=42,
+        )
+
+        self.assertEqual(projections["Likely"][-1].annual_return_rate, 0.10)
+        self.assertEqual(projections["Pessimistic"][-1].annual_return_rate, 0.07)
+        self.assertEqual(projections["Optimistic"][-1].annual_return_rate, 0.13)
 
     def test_variable_returns_are_reproducible_with_seed(self):
         def run_once() -> list:

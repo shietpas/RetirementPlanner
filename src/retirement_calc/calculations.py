@@ -17,7 +17,10 @@ from .capital_gains_tax_tables import calculate_capital_gains_tax
 
 
 # Long-run nominal approximations used as baseline market behavior.
-HISTORICAL_STOCK_RETURN_MEAN = 0.10
+# The stock baseline is intended to roughly match the S&P 500's long-run
+# total-return behavior over the last 20 years.
+SP500_REFERENCE_STOCK_RETURN_MEAN = 0.10
+HISTORICAL_STOCK_RETURN_MEAN = SP500_REFERENCE_STOCK_RETURN_MEAN
 HISTORICAL_BOND_RETURN_MEAN = 0.05
 
 
@@ -192,8 +195,12 @@ def apply_year_end_growth(accounts: list[Account]) -> list[Account]:
     return grown_accounts
 
 
+def scenario_target_stock_return(scenario_return_bias: float) -> float:
+    return clamp_annual_return_rate(HISTORICAL_STOCK_RETURN_MEAN + scenario_return_bias)
+
+
 def market_asset_returns(scenario_return_bias: float, stock_shock: float) -> tuple[float, float]:
-    stock_return = clamp_annual_return_rate(HISTORICAL_STOCK_RETURN_MEAN + scenario_return_bias + stock_shock)
+    stock_return = clamp_annual_return_rate(scenario_target_stock_return(scenario_return_bias) + stock_shock)
     # Bonds tend to be partially counter-cyclical to stock shocks.
     bond_return = clamp_annual_return_rate(
         HISTORICAL_BOND_RETURN_MEAN + (scenario_return_bias * 0.35) - (stock_shock * 0.40)
@@ -479,6 +486,7 @@ def simulate_retirement(
     tax_brackets: list[dict[str, float | None]],
     capital_gains_brackets: list[dict[str, float | None]],
     annual_return_volatility: float = 0.0,
+    inflation_rate: float = 0.025,
     scenario_return_bias: float = 0.0,
     random_seed: int | None = None,
 ) -> list[YearProjection]:
@@ -496,11 +504,12 @@ def simulate_retirement(
         stock_shock = rng.gauss(0.0, annual_return_volatility) if annual_return_volatility > 0 else 0.0
         stock_return, bond_return = market_asset_returns(scenario_return_bias, stock_shock)
 
+        inflation_multiplier = (1.0 + inflation_rate) ** (year_index - 1)
         if withdrawal_mode == "distribute_years":
             years_left = years - year_index + 1
-            target_withdrawal = round(total_remaining_before / years_left, 2)
+            target_withdrawal = round((total_remaining_before / years_left) * inflation_multiplier, 2)
         else:
-            target_withdrawal = annual_withdrawal_value
+            target_withdrawal = round(annual_withdrawal_value * inflation_multiplier, 2)
 
         owner_ages = {owner: age + (year_index - 1) for owner, age in owner_age_by_name.items()}
         retired_owners: set[str] = set()
@@ -704,6 +713,7 @@ def simulate_retirement_scenarios(
     pessimistic_return_bias: float,
     likely_return_bias: float,
     optimistic_return_bias: float,
+    inflation_rate: float = 0.025,
     random_seed: int | None = None,
 ) -> dict[str, list[YearProjection]]:
     scenario_biases = {
@@ -739,6 +749,7 @@ def simulate_retirement_scenarios(
             tax_brackets=tax_brackets,
             capital_gains_brackets=capital_gains_brackets,
             annual_return_volatility=annual_return_volatility,
+            inflation_rate=inflation_rate,
             scenario_return_bias=bias,
             random_seed=seed_base + idx,
         )
