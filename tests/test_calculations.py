@@ -123,8 +123,9 @@ class CalculationTests(unittest.TestCase):
 
         self.assertEqual(len(projection), 1)
         self.assertEqual(projection[0].ordinary_income, 5000.0)
-        self.assertEqual(projection[0].withdrawn_total, 10000.0)
+        self.assertEqual(projection[0].withdrawn_total, 10500.0)
         self.assertEqual(projection[0].taxes, 500.0)
+        self.assertEqual(projection[0].net_withdrawn_total, 10000.0)
         self.assertGreaterEqual(len(projection[0].withdrawal_sources), 1)
         self.assertEqual(projection[0].withdrawal_sources[0].owner, "Primary")
 
@@ -500,8 +501,9 @@ class CalculationTests(unittest.TestCase):
 
         self.assertEqual(len(projection), 1)
         self.assertEqual(projection[0].beginning_balance, 50000.0)
-        # Ending balance should be: (50000 - 10000) * 1.075 = 43000
-        self.assertAlmostEqual(projection[0].ending_balance, 43000.0, places=0)
+        # Net spending target requires larger gross withdrawal to pay taxes.
+        # Ending balance should be approximately: (50000 - 11111.11) * 1.075 = 41805.56
+        self.assertAlmostEqual(projection[0].ending_balance, 41805.56, places=2)
 
     def test_effective_tax_rate_included(self):
         """Verify that effective tax rate is included in the projection."""

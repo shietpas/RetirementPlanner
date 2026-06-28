@@ -825,6 +825,70 @@ class RetirementApp:
             self._render_projection(scenario_name, projection)
             self.results_text.insert(tk.END, "\n")
 
+    @staticmethod
+    def _funding_summary_values(item: YearProjection) -> tuple[float, float, float, float, float, float]:
+        net_by_source_type: dict[str, float] = {}
+        for source in item.income_sources:
+            net_by_source_type[source.source_type] = net_by_source_type.get(source.source_type, 0.0) + source.net_amount
+
+        net_job = round(net_by_source_type.get("job_income", 0.0), 2)
+        net_pension = round(net_by_source_type.get("pension_income", 0.0), 2)
+        net_social_security = round(net_by_source_type.get("social_security_income", 0.0), 2)
+        net_withdrawals = round(net_by_source_type.get("account_withdrawal", 0.0), 2)
+        total_net_available = round(net_job + net_pension + net_social_security + net_withdrawals, 2)
+        net_surplus_shortfall = round(total_net_available - item.desired_net_spending, 2)
+        return (
+            net_job,
+            net_pension,
+            net_social_security,
+            net_withdrawals,
+            total_net_available,
+            net_surplus_shortfall,
+        )
+
+    def _render_account_balance_graph(self, projection: list[YearProjection]) -> None:
+        account_keys: set[str] = set()
+        for year in projection:
+            account_keys.update(year.account_end_balances.keys())
+
+        if not account_keys:
+            self.results_text.insert(tk.END, "\nAccount Balance Graph: no account balance points available.\n")
+            return
+
+        self.results_text.insert(tk.END, "\nAccount Balance Graph (compact sparkline by account)\n")
+        years_axis = " ".join(str(year.calendar_year) for year in projection)
+        self.results_text.insert(tk.END, f"Years: {years_axis}\n")
+
+        max_balance = max(
+            (balance for year in projection for balance in year.account_end_balances.values()),
+            default=0.0,
+        )
+        spark_chars = " .:-=+*#%@"
+        if max_balance <= 0:
+            self.results_text.insert(tk.END, "All balances are 0.00 across years.\n")
+            return
+
+        self.results_text.insert(
+            tk.END,
+            "Scale: lowest -> highest (normalized within scenario): ' ' . : - = + * # % @\n",
+        )
+
+        for account_key in sorted(account_keys):
+            points: list[str] = []
+            first_balance = projection[0].account_end_balances.get(account_key, 0.0)
+            last_balance = projection[-1].account_end_balances.get(account_key, 0.0)
+            for year in projection:
+                balance = year.account_end_balances.get(account_key, 0.0)
+                ratio = balance / max_balance
+                idx = int(round(ratio * (len(spark_chars) - 1)))
+                idx = max(0, min(len(spark_chars) - 1, idx))
+                points.append(spark_chars[idx])
+            sparkline = "".join(points)
+            self.results_text.insert(
+                tk.END,
+                f"{account_key} | {sparkline} | start {first_balance:,.2f} -> end {last_balance:,.2f}\n",
+            )
+
     def _render_projection(self, scenario_name: str, projection: list[YearProjection]) -> None:
         self.results_text.insert(tk.END, f"=== {scenario_name} Scenario ===\n")
         if not projection:
@@ -837,14 +901,24 @@ class RetirementApp:
         self.results_text.insert(
             tk.END,
             "Year | Calendar Year | User Age | Spouse Age | Withdrawn | Salary | SS Income | Pension | Ordinary | "
-            "Taxable SS | Cap Gains | Taxes | Eff Tax % | Net Income | Begin Balance | End Balance | Shortfall | Return % | Gain/Loss | Market Adj % | "
+            "Taxable SS | Cap Gains | Taxes | Eff Tax % | Net Income | Net Target | Gross Wd | Net Wd | Begin Balance | End Balance | Shortfall | Return % | Gain/Loss | Invest Income | Market Adj % | "
             f"{account_type_headers}\n",
         )
-        self.results_text.insert(tk.END, "-" * 340 + "\n")
+        self.results_text.insert(tk.END, "-" * 420 + "\n")
 
         total_taxes = 0.0
         for item in projection:
             total_taxes += item.taxes
+            (
+                net_job,
+                net_pension,
+                net_social_security,
+                net_withdrawals,
+                total_net_available,
+                net_delta,
+            ) = self._funding_summary_values(item)
+            net_delta_label = "Surplus" if net_delta >= 0 else "Shortfall"
+
             account_type_values = " | ".join(
                 [
                     f"{item.withdrawal_by_account_type.get(account_type.value, 0.0):,.2f}"
@@ -867,13 +941,28 @@ class RetirementApp:
                 f"{item.taxes:>7,.2f} | "
                 f"{item.effective_tax_rate * 100:>8,.2f} | "
                 f"{item.net_income:>10,.2f} | "
+                f"{item.desired_net_spending:>10,.2f} | "
+                f"{item.gross_withdrawn_total:>8,.2f} | "
+                f"{item.net_withdrawn_total:>6,.2f} | "
                 f"{item.beginning_balance:>13,.2f} | "
                 f"{item.ending_balance:>11,.2f} | "
                 f"{item.shortfall:>8,.2f} | "
                 f"{item.annual_return_rate * 100:>8,.2f} | "
                 f"{item.annual_gain_loss:>9,.2f} | "
+                f"{item.investment_income_earned:>13,.2f} | "
                 f"{item.market_return_adjustment * 100:>11,.2f} | "
                 f"{account_type_values}\n"
+            )
+            self.results_text.insert(
+                tk.END,
+                "      [Funding Summary] "
+                f"Net Target {item.desired_net_spending:,.2f} | "
+                f"Job Net {net_job:,.2f} | "
+                f"Pension Net {net_pension:,.2f} | "
+                f"SS Net {net_social_security:,.2f} | "
+                f"Withdrawal Net {net_withdrawals:,.2f} | "
+                f"Total Net {total_net_available:,.2f} | "
+                f"{net_delta_label} {abs(net_delta):,.2f}\n",
             )
             if item.withdrawal_sources:
                 for source in item.withdrawal_sources:
@@ -881,7 +970,17 @@ class RetirementApp:
                         tk.END,
                         "      -> "
                         f"{source.owner} | {source.account_name} | {source.account_type} | "
-                        f"{source.tax_treatment} | {source.amount:,.2f}\n",
+                        f"{source.tax_treatment} | gross {source.amount:,.2f} | "
+                        f"tax {source.allocated_tax:,.2f} | net {source.net_amount:,.2f}\n",
+                    )
+            if item.income_sources:
+                for source in item.income_sources:
+                    self.results_text.insert(
+                        tk.END,
+                        "      => "
+                        f"{source.source_type} | {source.owner} | {source.label} | "
+                        f"gross {source.gross_amount:,.2f} | taxable {source.taxable_amount:,.2f} | "
+                        f"tax {source.allocated_tax:,.2f} | net {source.net_amount:,.2f}\n",
                     )
 
         self.results_text.insert(tk.END, "\n")
@@ -889,6 +988,7 @@ class RetirementApp:
         self.results_text.insert(tk.END, f"Final Balance: {projection[-1].ending_balance:,.2f}\n")
         if projection:
             self.results_text.insert(tk.END, f"Effective Tax Rate: {projection[-1].effective_tax_rate * 100:,.2f}%\n")
+            self._render_account_balance_graph(projection)
 
     def export_projection_csv(self) -> None:
         if not self.last_projection_by_scenario:
@@ -922,19 +1022,39 @@ class RetirementApp:
                         "capital_gains",
                         "taxes",
                         "net_income",
+                        "desired_net_spending",
+                        "gross_withdrawn_total",
+                        "net_withdrawn_total",
                         "beginning_balance",
                         "ending_balance",
                         "shortfall",
                         "annual_return_rate",
                         "annual_gain_loss",
+                        "investment_income_earned",
                         "market_return_adjustment",
                         "effective_tax_rate",
+                        "net_job_income",
+                        "net_pension_income",
+                        "net_social_security_income",
+                        "net_withdrawal_income",
+                        "total_net_available",
+                        "net_surplus_shortfall",
                         *[account_type.value for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS],
                         "withdrawal_sources",
+                        "income_sources",
+                        "account_end_balances",
                     ]
                 )
                 for scenario_name, projection in self.last_projection_by_scenario.items():
                     for year in projection:
+                        (
+                            net_job,
+                            net_pension,
+                            net_social_security,
+                            net_withdrawals,
+                            total_net_available,
+                            net_surplus_shortfall,
+                        ) = self._funding_summary_values(year)
                         sources = "; ".join(
                             [
                                 (
@@ -942,6 +1062,16 @@ class RetirementApp:
                                     f"{source.account_type}/{source.tax_treatment}/{source.amount:.2f}"
                                 )
                                 for source in year.withdrawal_sources
+                            ]
+                        )
+                        income_sources = "; ".join(
+                            [
+                                (
+                                    f"{source.source_type}/{source.owner}/{source.label}/"
+                                    f"gross:{source.gross_amount:.2f}/taxable:{source.taxable_amount:.2f}/"
+                                    f"tax:{source.allocated_tax:.2f}/net:{source.net_amount:.2f}"
+                                )
+                                for source in year.income_sources
                             ]
                         )
                         writer.writerow(
@@ -960,18 +1090,30 @@ class RetirementApp:
                                 f"{year.capital_gains:.2f}",
                                 f"{year.taxes:.2f}",
                                 f"{year.net_income:.2f}",
+                                f"{year.desired_net_spending:.2f}",
+                                f"{year.gross_withdrawn_total:.2f}",
+                                f"{year.net_withdrawn_total:.2f}",
                                 f"{year.beginning_balance:.2f}",
                                 f"{year.ending_balance:.2f}",
                                 f"{year.shortfall:.2f}",
                                 f"{year.annual_return_rate:.6f}",
                                 f"{year.annual_gain_loss:.2f}",
+                                f"{year.investment_income_earned:.2f}",
                                 f"{year.market_return_adjustment:.6f}",
                                 f"{year.effective_tax_rate:.6f}",
+                                f"{net_job:.2f}",
+                                f"{net_pension:.2f}",
+                                f"{net_social_security:.2f}",
+                                f"{net_withdrawals:.2f}",
+                                f"{total_net_available:.2f}",
+                                f"{net_surplus_shortfall:.2f}",
                                 *[
                                     f"{year.withdrawal_by_account_type.get(account_type.value, 0.0):.2f}"
                                     for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS
                                 ],
                                 sources,
+                                income_sources,
+                                json.dumps(year.account_end_balances, separators=(",", ":")),
                             ]
                         )
             messagebox.showinfo("Export complete", f"CSV exported to:\n{path}")

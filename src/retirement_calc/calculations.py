@@ -34,7 +34,20 @@ class WithdrawalSource:
     account_name: str
     account_type: str
     amount: float
+    net_amount: float
+    allocated_tax: float
     tax_treatment: str
+
+
+@dataclass
+class IncomeSource:
+    source_type: str
+    owner: str
+    label: str
+    gross_amount: float
+    taxable_amount: float
+    allocated_tax: float
+    net_amount: float
 
 
 @dataclass
@@ -43,7 +56,10 @@ class YearProjection:
     calendar_year: int
     user_age: int
     spouse_age: int | None
+    desired_net_spending: float
     withdrawn_total: float
+    gross_withdrawn_total: float
+    net_withdrawn_total: float
     salary_income: float
     social_security_income: float
     pension_income: float
@@ -57,10 +73,13 @@ class YearProjection:
     shortfall: float
     annual_return_rate: float = 0.0
     annual_gain_loss: float = 0.0
+    investment_income_earned: float = 0.0
     market_return_adjustment: float = 0.0
     effective_tax_rate: float = 0.0
     withdrawal_by_account_type: dict[str, float] = field(default_factory=dict)
     withdrawal_sources: list[WithdrawalSource] = field(default_factory=list)
+    income_sources: list[IncomeSource] = field(default_factory=list)
+    account_end_balances: dict[str, float] = field(default_factory=dict)
 
 
 RMD_UNIFORM_LIFETIME_FACTORS: dict[int, float] = {
@@ -242,6 +261,211 @@ def optimize_withdrawals(
     return withdrawals, round(remaining_needed, 2)
 
 
+def _clone_accounts(accounts: list[Account]) -> list[Account]:
+    return [
+        Account(
+            owner=account.owner,
+            name=account.name,
+            account_type=account.account_type,
+            balance=account.balance,
+            stock_mix=account.stock_mix,
+            cost_basis=account.cost_basis,
+        )
+        for account in accounts
+    ]
+
+
+def _round_money(value: float) -> float:
+    return round(value, 2)
+
+
+def _account_balance_key(account: Account) -> str:
+    return f"{account.owner}/{account.name}/{account.account_type.value}"
+
+
+def _allocate_taxes(
+    salary_income: float,
+    pension_income: float,
+    social_security_income: float,
+    breakdown: TaxBreakdown,
+    ordinary_income_tax: float,
+    capital_gains_tax: float,
+) -> dict[str, float]:
+    taxable_social_security = _round_money(social_security_income * 0.85)
+    ordinary_components = {
+        "salary": max(0.0, salary_income),
+        "pension": max(0.0, pension_income),
+        "taxable_social_security": max(0.0, taxable_social_security),
+        "ordinary_withdrawals": max(0.0, breakdown.ordinary_income),
+    }
+    ordinary_total = sum(ordinary_components.values())
+
+    allocations = {
+        "salary": 0.0,
+        "pension": 0.0,
+        "social_security": 0.0,
+        "ordinary_withdrawals": 0.0,
+        "capital_gains_withdrawals": 0.0,
+    }
+    if ordinary_total > 0:
+        allocations["salary"] = ordinary_income_tax * (ordinary_components["salary"] / ordinary_total)
+        allocations["pension"] = ordinary_income_tax * (ordinary_components["pension"] / ordinary_total)
+        allocations["social_security"] = ordinary_income_tax * (
+            ordinary_components["taxable_social_security"] / ordinary_total
+        )
+        allocations["ordinary_withdrawals"] = ordinary_income_tax * (
+            ordinary_components["ordinary_withdrawals"] / ordinary_total
+        )
+
+    if breakdown.capital_gains > 0:
+        allocations["capital_gains_withdrawals"] = capital_gains_tax
+
+    return {key: _round_money(value) for key, value in allocations.items()}
+
+
+def _build_income_and_withdrawal_sources(
+    salary_income: float,
+    pension_income: float,
+    social_security_income: float,
+    withdrawals: list[tuple[Account, float]],
+    tax_allocations: dict[str, float],
+    breakdown: TaxBreakdown,
+) -> tuple[list[IncomeSource], list[WithdrawalSource], float]:
+    income_sources: list[IncomeSource] = []
+    withdrawal_sources: list[WithdrawalSource] = []
+
+    salary_tax = tax_allocations.get("salary", 0.0)
+    pension_tax = tax_allocations.get("pension", 0.0)
+    social_security_tax = tax_allocations.get("social_security", 0.0)
+    ordinary_withdrawal_tax_total = tax_allocations.get("ordinary_withdrawals", 0.0)
+    capital_gains_withdrawal_tax_total = tax_allocations.get("capital_gains_withdrawals", 0.0)
+
+    if salary_income > 0:
+        income_sources.append(
+            IncomeSource(
+                source_type="job_income",
+                owner="Household",
+                label="Job Income",
+                gross_amount=_round_money(salary_income),
+                taxable_amount=_round_money(salary_income),
+                allocated_tax=salary_tax,
+                net_amount=_round_money(salary_income - salary_tax),
+            )
+        )
+
+    if pension_income > 0:
+        income_sources.append(
+            IncomeSource(
+                source_type="pension_income",
+                owner="Household",
+                label="Pension Income",
+                gross_amount=_round_money(pension_income),
+                taxable_amount=_round_money(pension_income),
+                allocated_tax=pension_tax,
+                net_amount=_round_money(pension_income - pension_tax),
+            )
+        )
+
+    if social_security_income > 0:
+        taxable_social_security = _round_money(social_security_income * 0.85)
+        income_sources.append(
+            IncomeSource(
+                source_type="social_security_income",
+                owner="Household",
+                label="Social Security Income",
+                gross_amount=_round_money(social_security_income),
+                taxable_amount=taxable_social_security,
+                allocated_tax=social_security_tax,
+                net_amount=_round_money(social_security_income - social_security_tax),
+            )
+        )
+
+    ordinary_withdrawn_total = max(0.0, breakdown.ordinary_income)
+    capital_gains_withdrawn_total = max(0.0, breakdown.capital_gains)
+    net_withdrawn_total = 0.0
+
+    for account, amount in withdrawals:
+        treatment = account_tax_treatment(account.account_type)
+        allocated_tax = 0.0
+        if treatment == TaxTreatment.ORDINARY_INCOME and ordinary_withdrawn_total > 0:
+            allocated_tax = ordinary_withdrawal_tax_total * (amount / ordinary_withdrawn_total)
+        elif treatment == TaxTreatment.CAPITAL_GAINS and capital_gains_withdrawn_total > 0:
+            allocated_tax = capital_gains_withdrawal_tax_total * (amount / capital_gains_withdrawn_total)
+
+        allocated_tax = _round_money(allocated_tax)
+        net_amount = _round_money(amount - allocated_tax)
+        net_withdrawn_total += net_amount
+        source = WithdrawalSource(
+            owner=account.owner,
+            account_name=account.name,
+            account_type=account.account_type.value,
+            amount=_round_money(amount),
+            net_amount=net_amount,
+            allocated_tax=allocated_tax,
+            tax_treatment=treatment.value,
+        )
+        withdrawal_sources.append(source)
+        income_sources.append(
+            IncomeSource(
+                source_type="account_withdrawal",
+                owner=account.owner,
+                label=account.name,
+                gross_amount=source.amount,
+                taxable_amount=(source.amount if treatment != TaxTreatment.TAX_FREE else 0.0),
+                allocated_tax=source.allocated_tax,
+                net_amount=source.net_amount,
+            )
+        )
+
+    return income_sources, withdrawal_sources, _round_money(net_withdrawn_total)
+
+
+def _evaluate_withdrawal_plan(
+    accounts_snapshot: list[Account],
+    owner_ages: dict[str, int],
+    retired_owners: set[str],
+    needed_withdrawal: float,
+    salary_income: float,
+    social_security_income: float,
+    pension_income: float,
+    tax_brackets: list[dict[str, float | None]],
+    capital_gains_brackets: list[dict[str, float | None]],
+) -> dict[str, object]:
+    withdrawals, shortfall = optimize_withdrawals(
+        accounts_snapshot,
+        owner_ages,
+        retired_owners,
+        needed_withdrawal,
+    )
+    breakdown = classify_withdrawals(withdrawals)
+    taxable_social_security = _round_money(social_security_income * 0.85)
+    ordinary_taxable_income = _round_money(
+        salary_income + pension_income + breakdown.ordinary_income + taxable_social_security,
+    )
+    ordinary_income_tax = calculate_progressive_tax(ordinary_taxable_income, tax_brackets)
+    capital_gains_tax = calculate_capital_gains_tax(
+        ordinary_taxable_income,
+        breakdown.capital_gains,
+        capital_gains_brackets,
+    )
+    taxes = _round_money(ordinary_income_tax + capital_gains_tax)
+    withdrawn_total = _round_money(sum(amount for _, amount in withdrawals))
+    net_income = _round_money(withdrawn_total + salary_income + social_security_income + pension_income - taxes)
+
+    return {
+        "withdrawals": withdrawals,
+        "shortfall": shortfall,
+        "breakdown": breakdown,
+        "taxable_social_security": taxable_social_security,
+        "ordinary_taxable_income": ordinary_taxable_income,
+        "ordinary_income_tax": ordinary_income_tax,
+        "capital_gains_tax": capital_gains_tax,
+        "taxes": taxes,
+        "withdrawn_total": withdrawn_total,
+        "net_income": net_income,
+    }
+
+
 def simulate_retirement(
     accounts: list[Account],
     years: int,
@@ -323,43 +547,86 @@ def simulate_retirement(
         # Calculate beginning balance before withdrawals
         beginning_balance = round(sum(account.balance for account in accounts), 2)
 
-        # All household income (salary, SS, pension) reduces withdrawal need
-        total_household_income = salary_income + social_security_income + pension_income
-        needed_withdrawal = max(0.0, round(target_withdrawal - total_household_income, 2))
+        # Determine withdrawal need against desired net spending, not gross spending.
+        # Guardrail: if net job income alone exceeds desired spending, take no discretionary withdrawals.
+        salary_only_tax = calculate_progressive_tax(max(0.0, salary_income), tax_brackets)
+        net_job_income = _round_money(salary_income - salary_only_tax)
+        desired_net_spending = _round_money(target_withdrawal)
 
-        withdrawals, shortfall = optimize_withdrawals(accounts, owner_ages, retired_owners, needed_withdrawal)
-        breakdown = classify_withdrawals(withdrawals)
-        sources: list[WithdrawalSource] = []
+        max_withdrawable = _round_money(
+            sum(account.balance for account in accounts if account.owner in retired_owners)
+        )
+        discretionary_request = 0.0
+        if net_job_income > desired_net_spending:
+            discretionary_request = 0.0
+        elif desired_net_spending > 0:
+            low = 0.0
+            high = max_withdrawable
+            for _ in range(24):
+                mid = _round_money((low + high) / 2.0)
+                eval_mid = _evaluate_withdrawal_plan(
+                    accounts_snapshot=_clone_accounts(accounts),
+                    owner_ages=owner_ages,
+                    retired_owners=retired_owners,
+                    needed_withdrawal=mid,
+                    salary_income=salary_income,
+                    social_security_income=social_security_income,
+                    pension_income=pension_income,
+                    tax_brackets=tax_brackets,
+                    capital_gains_brackets=capital_gains_brackets,
+                )
+                if float(eval_mid["net_income"]) >= desired_net_spending:
+                    high = mid
+                else:
+                    low = mid
+            discretionary_request = high
+
+        evaluation = _evaluate_withdrawal_plan(
+            accounts_snapshot=accounts,
+            owner_ages=owner_ages,
+            retired_owners=retired_owners,
+            needed_withdrawal=discretionary_request,
+            salary_income=salary_income,
+            social_security_income=social_security_income,
+            pension_income=pension_income,
+            tax_brackets=tax_brackets,
+            capital_gains_brackets=capital_gains_brackets,
+        )
+
+        withdrawals = evaluation["withdrawals"]
+        shortfall = float(evaluation["shortfall"])
+        breakdown = evaluation["breakdown"]
+        taxable_social_security = float(evaluation["taxable_social_security"])
+        ordinary_income_tax = float(evaluation["ordinary_income_tax"])
+        capital_gains_tax = float(evaluation["capital_gains_tax"])
+        taxes = float(evaluation["taxes"])
+        withdrawn_total = float(evaluation["withdrawn_total"])
+        net_income = float(evaluation["net_income"])
+
         withdrawal_by_account_type = {key: 0.0 for key in account_type_keys}
-        
+
         for account, amount in withdrawals:
             withdrawal_by_account_type[account.account_type.value] = round(
                 withdrawal_by_account_type[account.account_type.value] + amount,
                 2,
             )
-            sources.append(
-                WithdrawalSource(
-                    owner=account.owner,
-                    account_name=account.name,
-                    account_type=account.account_type.value,
-                    amount=round(amount, 2),
-                    tax_treatment=account_tax_treatment(account.account_type).value,
-                )
-            )
-        taxable_social_security = round(social_security_income * 0.85, 2)
-        ordinary_taxable_income = round(
-            salary_income + pension_income + breakdown.ordinary_income + taxable_social_security,
-            2,
+
+        tax_allocations = _allocate_taxes(
+            salary_income=salary_income,
+            pension_income=pension_income,
+            social_security_income=social_security_income,
+            breakdown=breakdown,
+            ordinary_income_tax=ordinary_income_tax,
+            capital_gains_tax=capital_gains_tax,
         )
-        ordinary_income_tax = calculate_progressive_tax(ordinary_taxable_income, tax_brackets)
-        capital_gains_tax = calculate_capital_gains_tax(
-            ordinary_taxable_income,
-            breakdown.capital_gains,
-            capital_gains_brackets,
+        income_sources, sources, net_withdrawn_total = _build_income_and_withdrawal_sources(
+            salary_income=salary_income,
+            pension_income=pension_income,
+            social_security_income=social_security_income,
+            withdrawals=withdrawals,
+            tax_allocations=tax_allocations,
+            breakdown=breakdown,
         )
-        taxes = round(ordinary_income_tax + capital_gains_tax, 2)
-        withdrawn_total = round(sum(amount for _, amount in withdrawals), 2)
-        net_income = round(withdrawn_total + salary_income + social_security_income + pension_income - taxes, 2)
 
         pre_growth_balance_total = sum(account.balance for account in accounts)
         weighted_rate_numerator = 0.0
@@ -369,21 +636,32 @@ def simulate_retirement(
             account.balance = apply_annual_return(account.balance, effective_rate)
 
         ending_balance = round(sum(account.balance for account in accounts), 2)
+        account_end_balances = {
+            _account_balance_key(account): _round_money(account.balance)
+            for account in accounts
+        }
         annual_return_rate = (
             round(weighted_rate_numerator / pre_growth_balance_total, 6)
             if pre_growth_balance_total > 0
             else 0.0
         )
         annual_gain_loss = round(ending_balance - pre_growth_balance_total, 2)
-        gross_income_total = round(withdrawn_total + salary_income + social_security_income + pension_income, 2)
-        effective_tax_rate = round(taxes / gross_income_total, 6) if gross_income_total > 0 else 0.0
+        gross_withdrawn_total = _round_money(withdrawn_total)
+        effective_tax_rate = (
+            round((gross_withdrawn_total - net_withdrawn_total) / gross_withdrawn_total, 6)
+            if gross_withdrawn_total > 0
+            else 0.0
+        )
         projections.append(
             YearProjection(
                 year_index=year_index,
                 calendar_year=base_year + (year_index - 1),
                 user_age=owner_ages.get("Primary", 0),
                 spouse_age=owner_ages.get("Spouse"),
+                desired_net_spending=desired_net_spending,
                 withdrawn_total=withdrawn_total,
+                gross_withdrawn_total=gross_withdrawn_total,
+                net_withdrawn_total=net_withdrawn_total,
                 salary_income=round(salary_income, 2),
                 social_security_income=round(social_security_income, 2),
                 pension_income=round(pension_income, 2),
@@ -397,10 +675,13 @@ def simulate_retirement(
                 shortfall=shortfall,
                 annual_return_rate=annual_return_rate,
                 annual_gain_loss=annual_gain_loss,
+                investment_income_earned=annual_gain_loss,
                 market_return_adjustment=round(stock_shock, 6),
                 effective_tax_rate=effective_tax_rate,
                 withdrawal_by_account_type=withdrawal_by_account_type,
                 withdrawal_sources=sources,
+                income_sources=income_sources,
+                account_end_balances=account_end_balances,
             )
         )
 
