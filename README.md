@@ -10,6 +10,61 @@ The app is intentionally narrow in scope. It does not currently model Roth conve
 
 The practical value is in showing how different accounts can be used at different points in time, what taxes are triggered, and how much of the desired spending target is actually funded after taxes.
 
+The CSV export is analytics-first. It now supports two reporting-oriented shapes built from the same projection data:
+
+- `Export CSV`: one flat row set where each row already carries annual scenario context plus a `row_type` of `year_summary`, `income_flow`, `withdrawal_flow`, or `account_balance`
+- `Export BI CSV`: a longer metric-oriented row set where each row is a single numeric metric with dimensional fields that work well in Power BI and Excel pivot tables
+
+Sample fixtures for both formats live in `tests/fixtures/sample_flat_export.csv` and `tests/fixtures/sample_power_bi_export.csv`.
+
+A Power BI starter report kit for the BI CSV lives in `powerbi/`.
+
+## Export Schemas
+
+### Flat Analytics CSV
+
+This export is best when you want one file that can be filtered directly without additional reshaping.
+
+- `scenario`: `Pessimistic`, `Likely`, or `Optimistic`
+- `row_type`: `year_summary`, `income_flow`, `withdrawal_flow`, or `account_balance`
+- `year`, `calendar_year`, `user_age`, `spouse_age`: yearly context repeated on every row
+- `owner`, `flow_category`, `flow_name`: reporting dimensions for household, income source, or account flow
+- `account_name`, `account_type`, `tax_treatment`: account-specific dimensions when relevant
+- `gross_amount`, `taxable_amount`, `tax_amount`, `net_amount`: flow values for income and withdrawals
+- `realized_capital_gains`: realized taxable gains for brokerage withdrawals
+- `account_beginning_balance`, `account_ending_balance`: per-account balances when relevant to the row
+- `account_beginning_capital_gains`, `account_ending_capital_gains`: per-account unrealized gains tracking for taxable accounts
+- `year_*`: repeated annual totals so every row can be grouped without joining to a separate summary table
+
+Recommended use:
+
+- Excel filters and ad hoc pivots
+- downstream CSV consumers that prefer a denormalized file
+- simple reporting where each row may need both detail and year totals
+
+### BI Metrics CSV
+
+This export is best when your reporting tool prefers a tall fact table.
+
+- `scenario`, `year`, `calendar_year`, `user_age`, `spouse_age`: yearly grain
+- `row_type`: `year_metric`, `income_metric`, `withdrawal_metric`, or `account_metric`
+- `metric_scope`: `year`, `flow`, or `account`
+- `metric_category`: summary bucket such as `summary`, `withdrawal`, `job_income`, `social_security_income`, or `balance`
+- `metric_name`: the actual measure, such as `taxes`, `net_income`, `gross_amount`, `taxable_amount`, `realized_capital_gains`, `ending_balance`, or `ending_capital_gains`
+- `owner`, `flow_name`, `account_name`, `account_type`, `tax_treatment`: dimensions you can place on rows, columns, slicers, or legends
+- `value`: the numeric fact
+
+Recommended use:
+
+- Power BI visuals and measures
+- star-schema friendly import into reporting databases
+- Excel pivot tables that prefer a single `value` column and separate metric dimensions
+
+### Which Export To Use
+
+- Use `Export CSV` when you want easier direct inspection and fewer transformations.
+- Use `Export BI CSV` when you want the cleanest path into Power BI, pandas group-bys, or generalized pivot tooling.
+
 ## Market Return Scenario Logic
 
 The stock projection model uses one long-run reference return for the market and then layers scenario-specific adjustments and annual randomness on top of it.
@@ -58,6 +113,8 @@ If `python` is not recognized, reinstall Python and enable PATH integration, or 
 ## Features in current scaffold
 - Explicit account types with separate Roth and Non-Roth variants (for example, 401k and 401k Roth)
 - Basic withdrawal tax classification helpers
+- Taxable account capital gains input so brokerage withdrawals can estimate taxable gains proportionally instead of treating the full withdrawal as gains
+- Dual analytics-first CSV exports: flat denormalized rows and BI-style long metrics
 - IRS federal tax bracket table stored separately in `src/retirement_calc/config/tax_tables.json`
 - IRS capital gains tax table stored separately in `src/retirement_calc/config/capital_gains_tax_tables.json`
 - Deterministic account growth with configurable annual return rates

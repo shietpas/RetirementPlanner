@@ -32,13 +32,23 @@ class TaxBreakdown:
 
 
 @dataclass
+class AccountWithdrawal:
+    account: Account
+    gross_amount: float
+    taxable_amount: float
+    realized_capital_gains: float
+
+
+@dataclass
 class WithdrawalSource:
     owner: str
     account_name: str
     account_type: str
     amount: float
+    taxable_amount: float
     net_amount: float
     allocated_tax: float
+    realized_capital_gains: float
     tax_treatment: str
 
 
@@ -82,7 +92,10 @@ class YearProjection:
     withdrawal_by_account_type: dict[str, float] = field(default_factory=dict)
     withdrawal_sources: list[WithdrawalSource] = field(default_factory=list)
     income_sources: list[IncomeSource] = field(default_factory=list)
+    account_begin_balances: dict[str, float] = field(default_factory=dict)
     account_end_balances: dict[str, float] = field(default_factory=dict)
+    account_begin_capital_gains: dict[str, float] = field(default_factory=dict)
+    account_end_capital_gains: dict[str, float] = field(default_factory=dict)
 
 
 RMD_UNIFORM_LIFETIME_FACTORS: dict[int, float] = {
@@ -152,22 +165,30 @@ def account_tax_treatment(account_type: AccountType) -> TaxTreatment:
     return ACCOUNT_TAX_TREATMENT[account_type]
 
 
-def classify_withdrawals(withdrawals: list[tuple[Account, float]]) -> TaxBreakdown:
+def classify_withdrawals(withdrawals: list[AccountWithdrawal | tuple[Account, float]]) -> TaxBreakdown:
     ordinary_income = 0.0
     capital_gains = 0.0
     tax_free = 0.0
 
-    for account, amount in withdrawals:
-        if amount < 0:
+    for withdrawal in withdrawals:
+        if isinstance(withdrawal, tuple):
+            account, amount = withdrawal
+            withdrawal = AccountWithdrawal(
+                account=account,
+                gross_amount=amount,
+                taxable_amount=(amount if account_tax_treatment(account.account_type) != TaxTreatment.TAX_FREE else 0.0),
+                realized_capital_gains=(amount if account_tax_treatment(account.account_type) == TaxTreatment.CAPITAL_GAINS else 0.0),
+            )
+        if withdrawal.gross_amount < 0:
             raise ValueError("withdrawal amount must be >= 0")
 
-        treatment = account_tax_treatment(account.account_type)
+        treatment = account_tax_treatment(withdrawal.account.account_type)
         if treatment == TaxTreatment.ORDINARY_INCOME:
-            ordinary_income += amount
+            ordinary_income += withdrawal.taxable_amount
         elif treatment == TaxTreatment.CAPITAL_GAINS:
-            capital_gains += amount
+            capital_gains += withdrawal.realized_capital_gains
         else:
-            tax_free += amount
+            tax_free += withdrawal.gross_amount
 
     return TaxBreakdown(
         ordinary_income=round(ordinary_income, 2),
@@ -190,6 +211,7 @@ def apply_year_end_growth(accounts: list[Account]) -> list[Account]:
                 balance=apply_annual_return(account.balance, blended_return),
                 stock_mix=account.stock_mix,
                 cost_basis=account.cost_basis,
+                capital_gains_amount=account.capital_gains_amount,
             )
         )
     return grown_accounts
@@ -221,12 +243,33 @@ def calculate_rmd(balance: float, age: int, account_type: AccountType) -> float:
     return round(balance / factor, 2)
 
 
-def _withdraw_from_account(account: Account, amount: float) -> float:
+def _withdraw_from_account(account: Account, amount: float) -> AccountWithdrawal | None:
     if amount <= 0:
-        return 0.0
+        return None
+    starting_balance = account.balance
     actual = min(account.balance, amount)
     account.balance = round(account.balance - actual, 2)
-    return actual
+    taxable_amount = 0.0
+    realized_capital_gains = 0.0
+    treatment = account_tax_treatment(account.account_type)
+
+    if treatment == TaxTreatment.ORDINARY_INCOME:
+        taxable_amount = round(actual, 2)
+    elif treatment == TaxTreatment.CAPITAL_GAINS and starting_balance > 0:
+        gain_ratio = min(1.0, max(0.0, account.capital_gains_amount / starting_balance))
+        basis_ratio = min(1.0, max(0.0, account.cost_basis / starting_balance))
+        realized_capital_gains = round(actual * gain_ratio, 2)
+        realized_basis = round(actual * basis_ratio, 2)
+        taxable_amount = realized_capital_gains
+        account.capital_gains_amount = round(max(0.0, account.capital_gains_amount - realized_capital_gains), 2)
+        account.cost_basis = round(max(0.0, account.cost_basis - realized_basis), 2)
+
+    return AccountWithdrawal(
+        account=account,
+        gross_amount=round(actual, 2),
+        taxable_amount=round(taxable_amount, 2),
+        realized_capital_gains=round(realized_capital_gains, 2),
+    )
 
 
 def optimize_withdrawals(
@@ -234,8 +277,8 @@ def optimize_withdrawals(
     owner_ages: dict[str, int],
     retired_owners: set[str],
     needed_withdrawal: float,
-) -> tuple[list[tuple[Account, float]], float]:
-    withdrawals: list[tuple[Account, float]] = []
+) -> tuple[list[AccountWithdrawal], float]:
+    withdrawals: list[AccountWithdrawal] = []
     remaining_needed = max(0.0, needed_withdrawal)
 
     for account in accounts:
@@ -244,9 +287,9 @@ def optimize_withdrawals(
         age = owner_ages.get(account.owner, 0)
         rmd_amount = calculate_rmd(account.balance, age, account.account_type)
         taken = _withdraw_from_account(account, rmd_amount)
-        if taken > 0:
-            withdrawals.append((account, taken))
-            remaining_needed = max(0.0, remaining_needed - taken)
+        if taken is not None and taken.gross_amount > 0:
+            withdrawals.append(taken)
+            remaining_needed = max(0.0, remaining_needed - taken.gross_amount)
 
     def priority_key(account: Account) -> int:
         if account.account_type == AccountType.TAXABLE_INVESTMENT:
@@ -261,9 +304,9 @@ def optimize_withdrawals(
         if remaining_needed <= 0:
             break
         taken = _withdraw_from_account(account, remaining_needed)
-        if taken > 0:
-            withdrawals.append((account, taken))
-            remaining_needed = max(0.0, remaining_needed - taken)
+        if taken is not None and taken.gross_amount > 0:
+            withdrawals.append(taken)
+            remaining_needed = max(0.0, remaining_needed - taken.gross_amount)
 
     return withdrawals, round(remaining_needed, 2)
 
@@ -277,6 +320,7 @@ def _clone_accounts(accounts: list[Account]) -> list[Account]:
             balance=account.balance,
             stock_mix=account.stock_mix,
             cost_basis=account.cost_basis,
+            capital_gains_amount=account.capital_gains_amount,
         )
         for account in accounts
     ]
@@ -334,7 +378,7 @@ def _build_income_and_withdrawal_sources(
     salary_income: float,
     pension_income: float,
     social_security_income: float,
-    withdrawals: list[tuple[Account, float]],
+    withdrawals: list[AccountWithdrawal],
     tax_allocations: dict[str, float],
     breakdown: TaxBreakdown,
 ) -> tuple[list[IncomeSource], list[WithdrawalSource], float]:
@@ -391,13 +435,17 @@ def _build_income_and_withdrawal_sources(
     capital_gains_withdrawn_total = max(0.0, breakdown.capital_gains)
     net_withdrawn_total = 0.0
 
-    for account, amount in withdrawals:
+    for withdrawal in withdrawals:
+        account = withdrawal.account
+        amount = withdrawal.gross_amount
         treatment = account_tax_treatment(account.account_type)
         allocated_tax = 0.0
         if treatment == TaxTreatment.ORDINARY_INCOME and ordinary_withdrawn_total > 0:
-            allocated_tax = ordinary_withdrawal_tax_total * (amount / ordinary_withdrawn_total)
+            allocated_tax = ordinary_withdrawal_tax_total * (withdrawal.taxable_amount / ordinary_withdrawn_total)
         elif treatment == TaxTreatment.CAPITAL_GAINS and capital_gains_withdrawn_total > 0:
-            allocated_tax = capital_gains_withdrawal_tax_total * (amount / capital_gains_withdrawn_total)
+            allocated_tax = capital_gains_withdrawal_tax_total * (
+                withdrawal.realized_capital_gains / capital_gains_withdrawn_total
+            )
 
         allocated_tax = _round_money(allocated_tax)
         net_amount = _round_money(amount - allocated_tax)
@@ -406,9 +454,11 @@ def _build_income_and_withdrawal_sources(
             owner=account.owner,
             account_name=account.name,
             account_type=account.account_type.value,
-            amount=_round_money(amount),
+            amount=withdrawal.gross_amount,
+            taxable_amount=withdrawal.taxable_amount,
             net_amount=net_amount,
             allocated_tax=allocated_tax,
+            realized_capital_gains=withdrawal.realized_capital_gains,
             tax_treatment=treatment.value,
         )
         withdrawal_sources.append(source)
@@ -418,7 +468,7 @@ def _build_income_and_withdrawal_sources(
                 owner=account.owner,
                 label=account.name,
                 gross_amount=source.amount,
-                taxable_amount=(source.amount if treatment != TaxTreatment.TAX_FREE else 0.0),
+                taxable_amount=source.taxable_amount,
                 allocated_tax=source.allocated_tax,
                 net_amount=source.net_amount,
             )
@@ -456,7 +506,7 @@ def _evaluate_withdrawal_plan(
         capital_gains_brackets,
     )
     taxes = _round_money(ordinary_income_tax + capital_gains_tax)
-    withdrawn_total = _round_money(sum(amount for _, amount in withdrawals))
+    withdrawn_total = _round_money(sum(withdrawal.gross_amount for withdrawal in withdrawals))
     net_income = _round_money(withdrawn_total + salary_income + social_security_income + pension_income - taxes)
 
     return {
@@ -555,6 +605,14 @@ def simulate_retirement(
 
         # Calculate beginning balance before withdrawals
         beginning_balance = round(sum(account.balance for account in accounts), 2)
+        account_begin_balances = {
+            _account_balance_key(account): _round_money(account.balance)
+            for account in accounts
+        }
+        account_begin_capital_gains = {
+            _account_balance_key(account): _round_money(account.capital_gains_amount)
+            for account in accounts
+        }
 
         # Determine withdrawal need against desired net spending, not gross spending.
         # Guardrail: if net job income alone exceeds desired spending, take no discretionary withdrawals.
@@ -614,9 +672,10 @@ def simulate_retirement(
 
         withdrawal_by_account_type = {key: 0.0 for key in account_type_keys}
 
-        for account, amount in withdrawals:
+        for withdrawal in withdrawals:
+            account = withdrawal.account
             withdrawal_by_account_type[account.account_type.value] = round(
-                withdrawal_by_account_type[account.account_type.value] + amount,
+                withdrawal_by_account_type[account.account_type.value] + withdrawal.gross_amount,
                 2,
             )
 
@@ -647,6 +706,10 @@ def simulate_retirement(
         ending_balance = round(sum(account.balance for account in accounts), 2)
         account_end_balances = {
             _account_balance_key(account): _round_money(account.balance)
+            for account in accounts
+        }
+        account_end_capital_gains = {
+            _account_balance_key(account): _round_money(account.capital_gains_amount)
             for account in accounts
         }
         annual_return_rate = (
@@ -690,7 +753,10 @@ def simulate_retirement(
                 withdrawal_by_account_type=withdrawal_by_account_type,
                 withdrawal_sources=sources,
                 income_sources=income_sources,
+                account_begin_balances=account_begin_balances,
                 account_end_balances=account_end_balances,
+                account_begin_capital_gains=account_begin_capital_gains,
+                account_end_capital_gains=account_end_capital_gains,
             )
         )
 
@@ -733,6 +799,7 @@ def simulate_retirement_scenarios(
                 balance=account.balance,
                 stock_mix=account.stock_mix,
                 cost_basis=account.cost_basis,
+                capital_gains_amount=account.capital_gains_amount,
             )
             for account in accounts
         ]
@@ -755,3 +822,381 @@ def simulate_retirement_scenarios(
         )
 
     return projections_by_scenario
+
+
+FLAT_EXPORT_COLUMNS = [
+    "scenario",
+    "row_type",
+    "year",
+    "calendar_year",
+    "user_age",
+    "spouse_age",
+    "owner",
+    "flow_category",
+    "flow_name",
+    "account_name",
+    "account_type",
+    "tax_treatment",
+    "gross_amount",
+    "taxable_amount",
+    "tax_amount",
+    "net_amount",
+    "realized_capital_gains",
+    "account_beginning_balance",
+    "account_ending_balance",
+    "account_beginning_capital_gains",
+    "account_ending_capital_gains",
+    "year_beginning_balance",
+    "year_ending_balance",
+    "year_total_withdrawals_gross",
+    "year_total_withdrawals_net",
+    "year_salary_income",
+    "year_social_security_income",
+    "year_pension_income",
+    "year_ordinary_income",
+    "year_taxable_social_security",
+    "year_capital_gains",
+    "year_taxes",
+    "year_net_income",
+    "year_desired_net_spending",
+    "year_total_net_available",
+    "year_net_surplus_shortfall",
+    "year_shortfall",
+    "year_annual_return_rate",
+    "year_annual_gain_loss",
+    "year_investment_income_earned",
+    "year_market_return_adjustment",
+    "year_effective_tax_rate",
+]
+
+POWER_BI_EXPORT_COLUMNS = [
+    "scenario",
+    "row_type",
+    "metric_scope",
+    "metric_category",
+    "metric_name",
+    "year",
+    "calendar_year",
+    "user_age",
+    "spouse_age",
+    "owner",
+    "flow_name",
+    "account_name",
+    "account_type",
+    "tax_treatment",
+    "value",
+]
+
+
+def _projection_net_summary(item: YearProjection) -> tuple[float, float]:
+    total_net_available = round(sum(source.net_amount for source in item.income_sources), 2)
+    net_surplus_shortfall = round(total_net_available - item.desired_net_spending, 2)
+    return total_net_available, net_surplus_shortfall
+
+
+def flatten_projection_rows(projection_by_scenario: dict[str, list[YearProjection]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+
+    for scenario_name, projection in projection_by_scenario.items():
+        for item in projection:
+            total_net_available, net_surplus_shortfall = _projection_net_summary(item)
+            base_row = {
+                "scenario": scenario_name,
+                "year": item.year_index,
+                "calendar_year": item.calendar_year,
+                "user_age": item.user_age,
+                "spouse_age": "" if item.spouse_age is None else item.spouse_age,
+                "year_beginning_balance": round(item.beginning_balance, 2),
+                "year_ending_balance": round(item.ending_balance, 2),
+                "year_total_withdrawals_gross": round(item.gross_withdrawn_total, 2),
+                "year_total_withdrawals_net": round(item.net_withdrawn_total, 2),
+                "year_salary_income": round(item.salary_income, 2),
+                "year_social_security_income": round(item.social_security_income, 2),
+                "year_pension_income": round(item.pension_income, 2),
+                "year_ordinary_income": round(item.ordinary_income, 2),
+                "year_taxable_social_security": round(item.taxable_social_security, 2),
+                "year_capital_gains": round(item.capital_gains, 2),
+                "year_taxes": round(item.taxes, 2),
+                "year_net_income": round(item.net_income, 2),
+                "year_desired_net_spending": round(item.desired_net_spending, 2),
+                "year_total_net_available": total_net_available,
+                "year_net_surplus_shortfall": net_surplus_shortfall,
+                "year_shortfall": round(item.shortfall, 2),
+                "year_annual_return_rate": round(item.annual_return_rate, 6),
+                "year_annual_gain_loss": round(item.annual_gain_loss, 2),
+                "year_investment_income_earned": round(item.investment_income_earned, 2),
+                "year_market_return_adjustment": round(item.market_return_adjustment, 6),
+                "year_effective_tax_rate": round(item.effective_tax_rate, 6),
+            }
+
+            rows.append(
+                {
+                    **base_row,
+                    "row_type": "year_summary",
+                    "owner": "Household",
+                    "flow_category": "summary",
+                    "flow_name": "annual_totals",
+                    "account_name": "",
+                    "account_type": "",
+                    "tax_treatment": "",
+                    "gross_amount": round(
+                        item.salary_income + item.social_security_income + item.pension_income + item.gross_withdrawn_total,
+                        2,
+                    ),
+                    "taxable_amount": round(
+                        item.salary_income + item.pension_income + item.taxable_social_security + item.ordinary_income + item.capital_gains,
+                        2,
+                    ),
+                    "tax_amount": round(item.taxes, 2),
+                    "net_amount": total_net_available,
+                    "realized_capital_gains": round(item.capital_gains, 2),
+                    "account_beginning_balance": "",
+                    "account_ending_balance": "",
+                    "account_beginning_capital_gains": "",
+                    "account_ending_capital_gains": "",
+                }
+            )
+
+            for source in item.income_sources:
+                rows.append(
+                    {
+                        **base_row,
+                        "row_type": "income_flow",
+                        "owner": source.owner,
+                        "flow_category": source.source_type,
+                        "flow_name": source.label,
+                        "account_name": source.label if source.source_type == "account_withdrawal" else "",
+                        "account_type": "",
+                        "tax_treatment": "",
+                        "gross_amount": round(source.gross_amount, 2),
+                        "taxable_amount": round(source.taxable_amount, 2),
+                        "tax_amount": round(source.allocated_tax, 2),
+                        "net_amount": round(source.net_amount, 2),
+                        "realized_capital_gains": 0.0,
+                        "account_beginning_balance": "",
+                        "account_ending_balance": "",
+                        "account_beginning_capital_gains": "",
+                        "account_ending_capital_gains": "",
+                    }
+                )
+
+            for source in item.withdrawal_sources:
+                account_key = f"{source.owner}/{source.account_name}/{source.account_type}"
+                rows.append(
+                    {
+                        **base_row,
+                        "row_type": "withdrawal_flow",
+                        "owner": source.owner,
+                        "flow_category": "withdrawal",
+                        "flow_name": source.account_name,
+                        "account_name": source.account_name,
+                        "account_type": source.account_type,
+                        "tax_treatment": source.tax_treatment,
+                        "gross_amount": round(source.amount, 2),
+                        "taxable_amount": round(source.taxable_amount, 2),
+                        "tax_amount": round(source.allocated_tax, 2),
+                        "net_amount": round(source.net_amount, 2),
+                        "realized_capital_gains": round(source.realized_capital_gains, 2),
+                        "account_beginning_balance": item.account_begin_balances.get(account_key, ""),
+                        "account_ending_balance": item.account_end_balances.get(account_key, ""),
+                        "account_beginning_capital_gains": item.account_begin_capital_gains.get(account_key, ""),
+                        "account_ending_capital_gains": item.account_end_capital_gains.get(account_key, ""),
+                    }
+                )
+
+            for account_key, ending_balance in item.account_end_balances.items():
+                owner, account_name, account_type = account_key.split("/", 2)
+                rows.append(
+                    {
+                        **base_row,
+                        "row_type": "account_balance",
+                        "owner": owner,
+                        "flow_category": "balance",
+                        "flow_name": "ending_balance",
+                        "account_name": account_name,
+                        "account_type": account_type,
+                        "tax_treatment": "",
+                        "gross_amount": "",
+                        "taxable_amount": "",
+                        "tax_amount": "",
+                        "net_amount": "",
+                        "realized_capital_gains": 0.0,
+                        "account_beginning_balance": item.account_begin_balances.get(account_key, ""),
+                        "account_ending_balance": ending_balance,
+                        "account_beginning_capital_gains": item.account_begin_capital_gains.get(account_key, ""),
+                        "account_ending_capital_gains": item.account_end_capital_gains.get(account_key, ""),
+                    }
+                )
+
+    return rows
+
+
+def flatten_projection_metric_rows(projection_by_scenario: dict[str, list[YearProjection]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+
+    def append_metric_row(
+        *,
+        scenario: str,
+        row_type: str,
+        metric_scope: str,
+        metric_category: str,
+        metric_name: str,
+        item: YearProjection,
+        value: float,
+        owner: str = "Household",
+        flow_name: str = "",
+        account_name: str = "",
+        account_type: str = "",
+        tax_treatment: str = "",
+    ) -> None:
+        rows.append(
+            {
+                "scenario": scenario,
+                "row_type": row_type,
+                "metric_scope": metric_scope,
+                "metric_category": metric_category,
+                "metric_name": metric_name,
+                "year": item.year_index,
+                "calendar_year": item.calendar_year,
+                "user_age": item.user_age,
+                "spouse_age": "" if item.spouse_age is None else item.spouse_age,
+                "owner": owner,
+                "flow_name": flow_name,
+                "account_name": account_name,
+                "account_type": account_type,
+                "tax_treatment": tax_treatment,
+                "value": round(value, 6),
+            }
+        )
+
+    for scenario_name, projection in projection_by_scenario.items():
+        for item in projection:
+            total_net_available, net_surplus_shortfall = _projection_net_summary(item)
+
+            for metric_name, value in [
+                ("beginning_balance", item.beginning_balance),
+                ("ending_balance", item.ending_balance),
+                ("gross_withdrawn_total", item.gross_withdrawn_total),
+                ("net_withdrawn_total", item.net_withdrawn_total),
+                ("salary_income", item.salary_income),
+                ("social_security_income", item.social_security_income),
+                ("pension_income", item.pension_income),
+                ("ordinary_income", item.ordinary_income),
+                ("taxable_social_security", item.taxable_social_security),
+                ("capital_gains", item.capital_gains),
+                ("taxes", item.taxes),
+                ("net_income", item.net_income),
+                ("desired_net_spending", item.desired_net_spending),
+                ("total_net_available", total_net_available),
+                ("net_surplus_shortfall", net_surplus_shortfall),
+                ("shortfall", item.shortfall),
+                ("annual_return_rate", item.annual_return_rate),
+                ("annual_gain_loss", item.annual_gain_loss),
+                ("investment_income_earned", item.investment_income_earned),
+                ("market_return_adjustment", item.market_return_adjustment),
+                ("effective_tax_rate", item.effective_tax_rate),
+            ]:
+                append_metric_row(
+                    scenario=scenario_name,
+                    row_type="year_metric",
+                    metric_scope="year",
+                    metric_category="summary",
+                    metric_name=metric_name,
+                    item=item,
+                    value=value,
+                )
+
+            for source in item.income_sources:
+                for metric_name, value in [
+                    ("gross_amount", source.gross_amount),
+                    ("taxable_amount", source.taxable_amount),
+                    ("tax_amount", source.allocated_tax),
+                    ("net_amount", source.net_amount),
+                ]:
+                    append_metric_row(
+                        scenario=scenario_name,
+                        row_type="income_metric",
+                        metric_scope="flow",
+                        metric_category=source.source_type,
+                        metric_name=metric_name,
+                        item=item,
+                        value=value,
+                        owner=source.owner,
+                        flow_name=source.label,
+                        account_name=source.label if source.source_type == "account_withdrawal" else "",
+                    )
+
+            for source in item.withdrawal_sources:
+                for metric_name, value in [
+                    ("gross_amount", source.amount),
+                    ("taxable_amount", source.taxable_amount),
+                    ("tax_amount", source.allocated_tax),
+                    ("net_amount", source.net_amount),
+                    ("realized_capital_gains", source.realized_capital_gains),
+                ]:
+                    append_metric_row(
+                        scenario=scenario_name,
+                        row_type="withdrawal_metric",
+                        metric_scope="flow",
+                        metric_category="withdrawal",
+                        metric_name=metric_name,
+                        item=item,
+                        value=value,
+                        owner=source.owner,
+                        flow_name=source.account_name,
+                        account_name=source.account_name,
+                        account_type=source.account_type,
+                        tax_treatment=source.tax_treatment,
+                    )
+
+                account_key = f"{source.owner}/{source.account_name}/{source.account_type}"
+                for metric_name, value in [
+                    ("beginning_balance", item.account_begin_balances.get(account_key, 0.0)),
+                    ("ending_balance", item.account_end_balances.get(account_key, 0.0)),
+                    ("beginning_capital_gains", item.account_begin_capital_gains.get(account_key, 0.0)),
+                    ("ending_capital_gains", item.account_end_capital_gains.get(account_key, 0.0)),
+                ]:
+                    append_metric_row(
+                        scenario=scenario_name,
+                        row_type="account_metric",
+                        metric_scope="account",
+                        metric_category="balance",
+                        metric_name=metric_name,
+                        item=item,
+                        value=float(value),
+                        owner=source.owner,
+                        flow_name=source.account_name,
+                        account_name=source.account_name,
+                        account_type=source.account_type,
+                        tax_treatment=source.tax_treatment,
+                    )
+
+            withdrawal_account_keys = {
+                f"{source.owner}/{source.account_name}/{source.account_type}"
+                for source in item.withdrawal_sources
+            }
+            for account_key, ending_balance in item.account_end_balances.items():
+                if account_key in withdrawal_account_keys:
+                    continue
+                owner, account_name, account_type = account_key.split("/", 2)
+                for metric_name, value in [
+                    ("beginning_balance", item.account_begin_balances.get(account_key, 0.0)),
+                    ("ending_balance", ending_balance),
+                    ("beginning_capital_gains", item.account_begin_capital_gains.get(account_key, 0.0)),
+                    ("ending_capital_gains", item.account_end_capital_gains.get(account_key, 0.0)),
+                ]:
+                    append_metric_row(
+                        scenario=scenario_name,
+                        row_type="account_metric",
+                        metric_scope="account",
+                        metric_category="balance",
+                        metric_name=metric_name,
+                        item=item,
+                        value=float(value),
+                        owner=owner,
+                        flow_name=account_name,
+                        account_name=account_name,
+                        account_type=account_type,
+                    )
+
+    return rows

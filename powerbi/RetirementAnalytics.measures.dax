@@ -1,0 +1,164 @@
+-- Table name expected by these expressions: ProjectionBiExport
+
+-- Calculated columns
+
+Scenario Sort =
+SWITCH(
+    ProjectionBiExport[scenario],
+    "Pessimistic", 1,
+    "Likely", 2,
+    "Optimistic", 3,
+    99
+)
+
+Tax Bucket =
+SWITCH(
+    TRUE(),
+    ProjectionBiExport[account_type] = "taxable_investment", "Taxable",
+    ProjectionBiExport[account_type] IN { "401k_non_roth", "403b_non_roth", "ira_traditional" }, "Tax-Deferred",
+    ProjectionBiExport[account_type] IN { "401k_roth", "403b_roth", "ira_roth" }, "Tax-Free",
+    BLANK()
+)
+
+Metric Group =
+SWITCH(
+    TRUE(),
+    ProjectionBiExport[row_type] = "year_metric", "Year",
+    ProjectionBiExport[row_type] = "income_metric", "Income Flow",
+    ProjectionBiExport[row_type] = "withdrawal_metric", "Withdrawal Flow",
+    ProjectionBiExport[row_type] = "account_metric", "Account",
+    BLANK()
+)
+
+-- Measures
+
+Ending Balance =
+CALCULATE(
+    SUM(ProjectionBiExport[value]),
+    ProjectionBiExport[row_type] = "year_metric",
+    ProjectionBiExport[metric_name] = "ending_balance"
+)
+
+Beginning Balance =
+CALCULATE(
+    SUM(ProjectionBiExport[value]),
+    ProjectionBiExport[row_type] = "year_metric",
+    ProjectionBiExport[metric_name] = "beginning_balance"
+)
+
+Gross Withdrawals =
+CALCULATE(
+    SUM(ProjectionBiExport[value]),
+    ProjectionBiExport[row_type] = "year_metric",
+    ProjectionBiExport[metric_name] = "gross_withdrawn_total"
+)
+
+Net Withdrawals =
+CALCULATE(
+    SUM(ProjectionBiExport[value]),
+    ProjectionBiExport[row_type] = "withdrawal_metric",
+    ProjectionBiExport[metric_name] = "net_amount"
+)
+
+Salary Income =
+CALCULATE(
+    SUM(ProjectionBiExport[value]),
+    ProjectionBiExport[row_type] = "year_metric",
+    ProjectionBiExport[metric_name] = "salary_income"
+)
+
+Social Security Income =
+CALCULATE(
+    SUM(ProjectionBiExport[value]),
+    ProjectionBiExport[row_type] = "year_metric",
+    ProjectionBiExport[metric_name] = "social_security_income"
+)
+
+Pension Income =
+CALCULATE(
+    SUM(ProjectionBiExport[value]),
+    ProjectionBiExport[row_type] = "year_metric",
+    ProjectionBiExport[metric_name] = "pension_income"
+)
+
+Taxes =
+CALCULATE(
+    SUM(ProjectionBiExport[value]),
+    ProjectionBiExport[row_type] = "year_metric",
+    ProjectionBiExport[metric_name] = "taxes"
+)
+
+Desired Net Spending =
+CALCULATE(
+    SUM(ProjectionBiExport[value]),
+    ProjectionBiExport[row_type] = "year_metric",
+    ProjectionBiExport[metric_name] = "desired_net_spending"
+)
+
+Shortfall Amount =
+CALCULATE(
+    SUM(ProjectionBiExport[value]),
+    ProjectionBiExport[row_type] = "year_metric",
+    ProjectionBiExport[metric_name] = "shortfall"
+)
+
+Realized Capital Gains =
+CALCULATE(
+    SUM(ProjectionBiExport[value]),
+    ProjectionBiExport[row_type] = "withdrawal_metric",
+    ProjectionBiExport[metric_name] = "realized_capital_gains"
+)
+
+Ending Balance By Tax Bucket =
+CALCULATE(
+    SUM(ProjectionBiExport[value]),
+    ProjectionBiExport[row_type] = "account_metric",
+    ProjectionBiExport[metric_name] = "ending_balance"
+)
+
+Total Inflows =
+[Salary Income] + [Social Security Income] + [Pension Income] + [Gross Withdrawals]
+
+Modeled Outflows =
+[Desired Net Spending] + [Taxes]
+
+Net Cash Flow =
+[Total Inflows] - [Modeled Outflows]
+
+Latest Calendar Year =
+MAX(ProjectionBiExport[calendar_year])
+
+Final Ending Balance =
+VAR LatestYear = [Latest Calendar Year]
+RETURN
+    CALCULATE(
+        [Ending Balance],
+        ProjectionBiExport[calendar_year] = LatestYear
+    )
+
+Final Taxes =
+VAR LatestYear = [Latest Calendar Year]
+RETURN
+    CALCULATE(
+        [Taxes],
+        ProjectionBiExport[calendar_year] = LatestYear
+    )
+
+First Shortfall Year =
+MINX(
+    FILTER(
+        ALLSELECTED(ProjectionBiExport[calendar_year]),
+        CALCULATE([Shortfall Amount]) > 0
+    ),
+    ProjectionBiExport[calendar_year]
+)
+
+Average Annual Return =
+AVERAGEX(
+    VALUES(ProjectionBiExport[calendar_year]),
+    CALCULATE(
+        SUM(ProjectionBiExport[value]),
+        ProjectionBiExport[row_type] = "year_metric",
+        ProjectionBiExport[metric_name] = "annual_return_rate"
+    )
+)

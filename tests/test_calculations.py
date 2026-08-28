@@ -4,6 +4,8 @@ from src.retirement_calc.calculations import (
     apply_annual_return,
     calculate_rmd,
     classify_withdrawals,
+    flatten_projection_rows,
+    flatten_projection_metric_rows,
     simulate_retirement,
     simulate_retirement_scenarios,
 )
@@ -86,6 +88,43 @@ class CalculationTests(unittest.TestCase):
     def test_capital_gains_tax_uses_brackets(self):
         brackets = capital_gains_brackets_for_status(default_capital_gains_config(), FILING_STATUS_SINGLE)
         self.assertEqual(calculate_capital_gains_tax(40_000.0, 20_000.0, brackets), 1747.5)
+
+    def test_taxable_withdrawal_realizes_only_proportional_gains(self):
+        projection = simulate_retirement(
+            accounts=[
+                Account(
+                    owner="Primary",
+                    name="Brokerage",
+                    account_type=AccountType.TAXABLE_INVESTMENT,
+                    balance=100000.0,
+                    stock_mix=0.0,
+                    cost_basis=60000.0,
+                    capital_gains_amount=40000.0,
+                )
+            ],
+            years=1,
+            annual_withdrawal_value=10000.0,
+            withdrawal_mode="flat",
+            owner_age_by_name={"Primary": 70},
+            owner_retirement_age_by_name={"Primary": 60},
+            owner_salary_by_name={"Primary": 0.0},
+            owner_ss_by_name={"Primary": (67, 0.0)},
+            owner_pension_by_name=None,
+            tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
+            capital_gains_brackets=capital_gains_brackets_for_status(
+                default_capital_gains_config(),
+                FILING_STATUS_SINGLE,
+            ),
+            annual_return_volatility=0.0,
+            inflation_rate=0.0,
+            random_seed=1,
+        )
+
+        self.assertEqual(projection[0].gross_withdrawn_total, 10000.0)
+        self.assertEqual(projection[0].capital_gains, 4000.0)
+        self.assertEqual(projection[0].withdrawal_sources[0].taxable_amount, 4000.0)
+        self.assertEqual(projection[0].withdrawal_sources[0].realized_capital_gains, 4000.0)
+        self.assertEqual(projection[0].account_end_capital_gains["Primary/Brokerage/taxable_investment"], 36000.0)
 
     def test_simulate_retirement_withdrawals_respect_tax_identity(self):
         accounts = [
@@ -299,6 +338,110 @@ class CalculationTests(unittest.TestCase):
 
         self.assertLess(pess_end, likely_end)
         self.assertLess(likely_end, opt_end)
+
+    def test_flat_export_rows_include_summary_income_withdrawal_and_balance(self):
+        projections = simulate_retirement_scenarios(
+            accounts=[
+                Account(
+                    owner="Primary",
+                    name="Brokerage",
+                    account_type=AccountType.TAXABLE_INVESTMENT,
+                    balance=100000.0,
+                    stock_mix=0.0,
+                    cost_basis=60000.0,
+                    capital_gains_amount=40000.0,
+                )
+            ],
+            years=1,
+            annual_withdrawal_value=10000.0,
+            withdrawal_mode="flat",
+            owner_age_by_name={"Primary": 70},
+            owner_retirement_age_by_name={"Primary": 60},
+            owner_salary_by_name={"Primary": 0.0},
+            owner_ss_by_name={"Primary": (67, 0.0)},
+            owner_pension_by_name=None,
+            tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
+            capital_gains_brackets=capital_gains_brackets_for_status(
+                default_capital_gains_config(),
+                FILING_STATUS_SINGLE,
+            ),
+            annual_return_volatility=0.0,
+            pessimistic_return_bias=0.0,
+            likely_return_bias=0.0,
+            optimistic_return_bias=0.0,
+            inflation_rate=0.0,
+            random_seed=7,
+        )
+
+        rows = flatten_projection_rows({"Likely": projections["Likely"]})
+
+        row_types = {row["row_type"] for row in rows}
+        self.assertEqual(row_types, {"year_summary", "income_flow", "withdrawal_flow", "account_balance"})
+
+        withdrawal_row = next(row for row in rows if row["row_type"] == "withdrawal_flow")
+        self.assertEqual(withdrawal_row["taxable_amount"], 4000.0)
+        self.assertEqual(withdrawal_row["realized_capital_gains"], 4000.0)
+
+        balance_row = next(row for row in rows if row["row_type"] == "account_balance")
+        self.assertEqual(balance_row["account_beginning_balance"], 100000.0)
+        self.assertEqual(balance_row["account_beginning_capital_gains"], 40000.0)
+
+    def test_power_bi_export_rows_unpivot_metrics(self):
+        projections = simulate_retirement_scenarios(
+            accounts=[
+                Account(
+                    owner="Primary",
+                    name="Brokerage",
+                    account_type=AccountType.TAXABLE_INVESTMENT,
+                    balance=100000.0,
+                    stock_mix=0.0,
+                    cost_basis=60000.0,
+                    capital_gains_amount=40000.0,
+                )
+            ],
+            years=1,
+            annual_withdrawal_value=10000.0,
+            withdrawal_mode="flat",
+            owner_age_by_name={"Primary": 70},
+            owner_retirement_age_by_name={"Primary": 60},
+            owner_salary_by_name={"Primary": 0.0},
+            owner_ss_by_name={"Primary": (67, 0.0)},
+            owner_pension_by_name=None,
+            tax_brackets=tax_brackets_for_status(default_tax_table_config(), FILING_STATUS_SINGLE),
+            capital_gains_brackets=capital_gains_brackets_for_status(
+                default_capital_gains_config(),
+                FILING_STATUS_SINGLE,
+            ),
+            annual_return_volatility=0.0,
+            pessimistic_return_bias=0.0,
+            likely_return_bias=0.0,
+            optimistic_return_bias=0.0,
+            inflation_rate=0.0,
+            random_seed=7,
+        )
+
+        rows = flatten_projection_metric_rows({"Likely": projections["Likely"]})
+
+        metric_scopes = {row["metric_scope"] for row in rows}
+        self.assertEqual(metric_scopes, {"year", "flow", "account"})
+
+        year_metric = next(
+            row for row in rows
+            if row["row_type"] == "year_metric" and row["metric_name"] == "capital_gains"
+        )
+        self.assertEqual(year_metric["value"], 4000.0)
+
+        withdrawal_metric = next(
+            row for row in rows
+            if row["row_type"] == "withdrawal_metric" and row["metric_name"] == "realized_capital_gains"
+        )
+        self.assertEqual(withdrawal_metric["value"], 4000.0)
+
+        account_metric = next(
+            row for row in rows
+            if row["row_type"] == "account_metric" and row["metric_name"] == "ending_capital_gains"
+        )
+        self.assertEqual(account_metric["value"], 36000.0)
 
     def test_likely_scenario_tracks_sp500_reference_return(self):
         projections = simulate_retirement_scenarios(

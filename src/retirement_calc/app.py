@@ -7,7 +7,15 @@ from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from .calculations import YearProjection, age_on_date, simulate_retirement_scenarios
+from .calculations import (
+    FLAT_EXPORT_COLUMNS,
+    POWER_BI_EXPORT_COLUMNS,
+    YearProjection,
+    age_on_date,
+    flatten_projection_metric_rows,
+    flatten_projection_rows,
+    simulate_retirement_scenarios,
+)
 from .capital_gains_tax_tables import (
     FILING_STATUS_MARRIED_JOINT as CG_FILING_STATUS_MARRIED_JOINT,
     FILING_STATUS_SINGLE as CG_FILING_STATUS_SINGLE,
@@ -92,6 +100,7 @@ class RetirementApp:
         self.account_balance_var = tk.StringVar(value="0")
         self.account_stock_mix_var = tk.StringVar(value="70")
         self.account_cost_basis_var = tk.StringVar(value="0")
+        self.account_capital_gains_var = tk.StringVar(value="0")
 
         self.withdrawal_mode_var = tk.StringVar(value="flat")
         self.withdrawal_value_var = tk.StringVar(value="60000")
@@ -262,17 +271,20 @@ class RetirementApp:
         ttk.Label(frame, text="Cost Basis (Taxable only)").grid(row=0, column=5, sticky="w", padx=6, pady=4)
         ttk.Entry(frame, textvariable=self.account_cost_basis_var, width=14).grid(row=1, column=5, padx=6, pady=4)
 
-        ttk.Button(frame, text="Add Account", command=self.add_account).grid(row=1, column=6, padx=6, pady=4)
-        ttk.Button(frame, text="Update Selected", command=self.update_selected_account).grid(row=1, column=7, padx=6, pady=4)
-        ttk.Button(frame, text="Remove Selected", command=self.remove_selected_account).grid(row=1, column=8, padx=6, pady=4)
+        ttk.Label(frame, text="Capital Gains Amt (Taxable only)").grid(row=0, column=6, sticky="w", padx=6, pady=4)
+        ttk.Entry(frame, textvariable=self.account_capital_gains_var, width=16).grid(row=1, column=6, padx=6, pady=4)
+
+        ttk.Button(frame, text="Add Account", command=self.add_account).grid(row=1, column=7, padx=6, pady=4)
+        ttk.Button(frame, text="Update Selected", command=self.update_selected_account).grid(row=1, column=8, padx=6, pady=4)
+        ttk.Button(frame, text="Remove Selected", command=self.remove_selected_account).grid(row=1, column=9, padx=6, pady=4)
 
         self.accounts_tree = ttk.Treeview(
             frame,
-            columns=("owner", "name", "type", "balance", "stock_mix", "cost_basis"),
+            columns=("owner", "name", "type", "balance", "stock_mix", "cost_basis", "capital_gains"),
             show="headings",
             height=7,
         )
-        self.accounts_tree.grid(row=2, column=0, columnspan=9, sticky="ew", padx=6, pady=8)
+        self.accounts_tree.grid(row=2, column=0, columnspan=10, sticky="ew", padx=6, pady=8)
 
         for col, text, width in [
             ("owner", "Owner", 90),
@@ -281,6 +293,7 @@ class RetirementApp:
             ("balance", "Balance", 110),
             ("stock_mix", "Stock Mix %", 95),
             ("cost_basis", "Cost Basis", 110),
+            ("capital_gains", "Cap Gains Amt", 120),
         ]:
             self.accounts_tree.heading(col, text=text)
             self.accounts_tree.column(col, width=width, anchor="w")
@@ -356,6 +369,9 @@ class RetirementApp:
         ttk.Button(plan_content, text="Export CSV", command=self.export_projection_csv).grid(
             row=4, column=3, padx=6, pady=4, sticky="w"
         )
+        ttk.Button(plan_content, text="Export BI CSV", command=self.export_projection_power_bi_csv).grid(
+            row=4, column=4, padx=6, pady=4, sticky="w"
+        )
 
         ttk.Button(plan_content, text="Export Income Tax Table", command=self.export_income_tax_table_json).grid(
             row=5, column=0, padx=6, pady=4, sticky="w"
@@ -428,6 +444,7 @@ class RetirementApp:
                     "balance": account.balance,
                     "stock_mix": account.stock_mix,
                     "cost_basis": account.cost_basis,
+                    "capital_gains_amount": account.capital_gains_amount,
                 }
                 for account in self.accounts
             ],
@@ -526,6 +543,12 @@ class RetirementApp:
                     balance=float(item.get("balance", 0.0)),
                     stock_mix=stock_mix,
                     cost_basis=float(item.get("cost_basis", 0.0)),
+                    capital_gains_amount=float(
+                        item.get(
+                            "capital_gains_amount",
+                            max(0.0, float(item.get("balance", 0.0)) - float(item.get("cost_basis", 0.0))),
+                        )
+                    ),
                 )
             )
 
@@ -642,9 +665,11 @@ class RetirementApp:
             balance = float(self.account_balance_var.get())
             stock_mix = float(self.account_stock_mix_var.get()) / 100.0
             cost_basis = float(self.account_cost_basis_var.get())
+            capital_gains_amount = float(self.account_capital_gains_var.get())
 
             if account_type != AccountType.TAXABLE_INVESTMENT:
                 cost_basis = 0.0
+                capital_gains_amount = 0.0
 
             account = Account(
                 owner=self.account_owner_var.get(),
@@ -653,6 +678,7 @@ class RetirementApp:
                 balance=balance,
                 stock_mix=stock_mix,
                 cost_basis=cost_basis,
+                capital_gains_amount=capital_gains_amount,
             )
             self.accounts.append(account)
             self._refresh_accounts_tree()
@@ -683,6 +709,7 @@ class RetirementApp:
         self.account_balance_var.set(f"{account.balance:.2f}")
         self.account_stock_mix_var.set(f"{account.stock_mix * 100:.2f}")
         self.account_cost_basis_var.set(f"{account.cost_basis:.2f}")
+        self.account_capital_gains_var.set(f"{account.capital_gains_amount:.2f}")
 
     def update_selected_account(self) -> None:
         selected = self.accounts_tree.selection()
@@ -701,9 +728,11 @@ class RetirementApp:
             balance = float(self.account_balance_var.get())
             stock_mix = float(self.account_stock_mix_var.get()) / 100.0
             cost_basis = float(self.account_cost_basis_var.get())
+            capital_gains_amount = float(self.account_capital_gains_var.get())
 
             if account_type != AccountType.TAXABLE_INVESTMENT:
                 cost_basis = 0.0
+                capital_gains_amount = 0.0
 
             self.accounts[index] = Account(
                 owner=self.account_owner_var.get(),
@@ -712,6 +741,7 @@ class RetirementApp:
                 balance=balance,
                 stock_mix=stock_mix,
                 cost_basis=cost_basis,
+                capital_gains_amount=capital_gains_amount,
             )
             self._refresh_accounts_tree()
             self.accounts_tree.selection_set(str(index))
@@ -735,6 +765,7 @@ class RetirementApp:
                     f"{account.balance:,.2f}",
                     f"{account.stock_mix * 100:.2f}",
                     f"{account.cost_basis:,.2f}",
+                    f"{account.capital_gains_amount:,.2f}",
                 ),
             )
 
@@ -1004,7 +1035,8 @@ class RetirementApp:
                         tk.END,
                         "      -> "
                         f"{source.owner} | {source.account_name} | {source.account_type} | "
-                        f"{source.tax_treatment} | gross {source.amount:,.2f} | "
+                        f"{source.tax_treatment} | gross {source.amount:,.2f} | taxable {source.taxable_amount:,.2f} | "
+                        f"cap gains {source.realized_capital_gains:,.2f} | "
                         f"tax {source.allocated_tax:,.2f} | net {source.net_amount:,.2f}\n",
                     )
             if item.income_sources:
@@ -1039,118 +1071,32 @@ class RetirementApp:
 
         try:
             with open(path, "w", newline="", encoding="utf-8") as csv_file:
-                writer = csv.writer(csv_file)
-                writer.writerow(
-                    [
-                        "scenario",
-                        "year",
-                        "calendar_year",
-                        "user_age",
-                        "spouse_age",
-                        "withdrawn_total",
-                        "salary_income",
-                        "social_security_income",
-                        "pension_income",
-                        "ordinary_income",
-                        "taxable_social_security",
-                        "capital_gains",
-                        "taxes",
-                        "net_income",
-                        "desired_net_spending",
-                        "gross_withdrawn_total",
-                        "net_withdrawn_total",
-                        "beginning_balance",
-                        "ending_balance",
-                        "shortfall",
-                        "annual_return_rate",
-                        "annual_gain_loss",
-                        "investment_income_earned",
-                        "market_return_adjustment",
-                        "effective_tax_rate",
-                        "net_job_income",
-                        "net_pension_income",
-                        "net_social_security_income",
-                        "net_withdrawal_income",
-                        "total_net_available",
-                        "net_surplus_shortfall",
-                        *[account_type.value for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS],
-                        "withdrawal_sources",
-                        "income_sources",
-                        "account_end_balances",
-                    ]
-                )
-                for scenario_name, projection in self.last_projection_by_scenario.items():
-                    for year in projection:
-                        (
-                            net_job,
-                            net_pension,
-                            net_social_security,
-                            net_withdrawals,
-                            total_net_available,
-                            net_surplus_shortfall,
-                        ) = self._funding_summary_values(year)
-                        sources = "; ".join(
-                            [
-                                (
-                                    f"{source.owner}/{source.account_name}/"
-                                    f"{source.account_type}/{source.tax_treatment}/{source.amount:.2f}"
-                                )
-                                for source in year.withdrawal_sources
-                            ]
-                        )
-                        income_sources = "; ".join(
-                            [
-                                (
-                                    f"{source.source_type}/{source.owner}/{source.label}/"
-                                    f"gross:{source.gross_amount:.2f}/taxable:{source.taxable_amount:.2f}/"
-                                    f"tax:{source.allocated_tax:.2f}/net:{source.net_amount:.2f}"
-                                )
-                                for source in year.income_sources
-                            ]
-                        )
-                        writer.writerow(
-                            [
-                                scenario_name,
-                                year.year_index,
-                                year.calendar_year,
-                                year.user_age,
-                                "" if year.spouse_age is None else year.spouse_age,
-                                f"{year.withdrawn_total:.2f}",
-                                f"{year.salary_income:.2f}",
-                                f"{year.social_security_income:.2f}",
-                                f"{year.pension_income:.2f}",
-                                f"{year.ordinary_income:.2f}",
-                                f"{year.taxable_social_security:.2f}",
-                                f"{year.capital_gains:.2f}",
-                                f"{year.taxes:.2f}",
-                                f"{year.net_income:.2f}",
-                                f"{year.desired_net_spending:.2f}",
-                                f"{year.gross_withdrawn_total:.2f}",
-                                f"{year.net_withdrawn_total:.2f}",
-                                f"{year.beginning_balance:.2f}",
-                                f"{year.ending_balance:.2f}",
-                                f"{year.shortfall:.2f}",
-                                f"{year.annual_return_rate:.6f}",
-                                f"{year.annual_gain_loss:.2f}",
-                                f"{year.investment_income_earned:.2f}",
-                                f"{year.market_return_adjustment:.6f}",
-                                f"{year.effective_tax_rate:.6f}",
-                                f"{net_job:.2f}",
-                                f"{net_pension:.2f}",
-                                f"{net_social_security:.2f}",
-                                f"{net_withdrawals:.2f}",
-                                f"{total_net_available:.2f}",
-                                f"{net_surplus_shortfall:.2f}",
-                                *[
-                                    f"{year.withdrawal_by_account_type.get(account_type.value, 0.0):.2f}"
-                                    for account_type in ACCOUNT_TYPE_EXPORT_COLUMNS
-                                ],
-                                sources,
-                                income_sources,
-                                json.dumps(year.account_end_balances, separators=(",", ":")),
-                            ]
-                        )
+                writer = csv.DictWriter(csv_file, fieldnames=FLAT_EXPORT_COLUMNS)
+                writer.writeheader()
+                writer.writerows(flatten_projection_rows(self.last_projection_by_scenario))
             messagebox.showinfo("Export complete", f"CSV exported to:\n{path}")
+        except Exception as exc:
+            messagebox.showerror("Export failed", str(exc))
+
+    def export_projection_power_bi_csv(self) -> None:
+        if not self.last_projection_by_scenario:
+            messagebox.showinfo("No results", "Run Calculate Plan before exporting BI CSV.")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV files", "*.csv")],
+            title="Export Projection BI CSV",
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as csv_file:
+                writer = csv.DictWriter(csv_file, fieldnames=POWER_BI_EXPORT_COLUMNS)
+                writer.writeheader()
+                writer.writerows(flatten_projection_metric_rows(self.last_projection_by_scenario))
+            messagebox.showinfo("Export complete", f"BI CSV exported to:\n{path}")
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc))
 

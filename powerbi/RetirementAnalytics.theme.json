@@ -1,0 +1,19 @@
+{
+  "name": "Retirement Analytics Plan",
+  "dataColors": [
+    "#1E4E8C",
+    "#4F83C2",
+    "#7EC8E3",
+    "#D8B24C",
+    "#D65A4A",
+    "#4C8C5A",
+    "#8E6C8A",
+    "#264653"
+  ],
+  "background": "#FFFFFF",
+  "foreground": "#132A43",
+  "tableAccent": "#1E4E8C",
+  "good": "#4C8C5A",
+  "neutral": "#D8B24C",
+  "bad": "#D65A4A"
+}

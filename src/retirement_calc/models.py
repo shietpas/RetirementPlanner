@@ -57,14 +57,25 @@ class Account:
     balance: float
     stock_mix: float = 0.60
     cost_basis: float = 0.0
+    capital_gains_amount: float = 0.0
 
     def __post_init__(self) -> None:
         if self.balance < 0:
             raise ValueError("balance must be >= 0")
         if not 0.0 <= self.stock_mix <= 1.0:
             raise ValueError("stock_mix must be between 0.0 and 1.0")
+        if self.cost_basis < 0:
+            raise ValueError("cost_basis must be >= 0")
+        if self.capital_gains_amount < 0:
+            raise ValueError("capital_gains_amount must be >= 0")
+        if self.capital_gains_amount > self.balance:
+            raise ValueError("capital_gains_amount must be <= balance")
         if self.account_type != AccountType.TAXABLE_INVESTMENT and self.cost_basis != 0:
             raise ValueError("cost_basis is only used for taxable investment accounts")
+        if self.account_type != AccountType.TAXABLE_INVESTMENT and self.capital_gains_amount != 0:
+            raise ValueError("capital_gains_amount is only used for taxable investment accounts")
+        if self.account_type == AccountType.TAXABLE_INVESTMENT and self.capital_gains_amount == 0.0:
+            self.capital_gains_amount = max(0.0, round(self.balance - self.cost_basis, 2))
 
 
 @dataclass

@@ -1,0 +1,4 @@
+scenario,row_type,metric_scope,metric_category,metric_name,year,calendar_year,user_age,spouse_age,owner,flow_name,account_name,account_type,tax_treatment,value
+Likely,year_metric,year,summary,capital_gains,1,2026,70,,Household,,,,,4000.0
+Likely,withdrawal_metric,flow,withdrawal,realized_capital_gains,1,2026,70,,Primary,Brokerage,Brokerage,taxable_investment,capital_gains,4000.0
+Likely,account_metric,account,balance,ending_capital_gains,1,2026,70,,Primary,Brokerage,Brokerage,taxable_investment,capital_gains,36000.0
